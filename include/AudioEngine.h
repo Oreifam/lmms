@@ -53,6 +53,20 @@ constexpr f_cnt_t MINIMUM_BUFFER_SIZE = 32;
 constexpr f_cnt_t DEFAULT_BUFFER_SIZE = 256;
 constexpr f_cnt_t MAXIMUM_BUFFER_SIZE = 4096;
 
+// Host-API buffer and sample rate used when the user has not chosen one.
+// On Windows the target is onboard Realtek: 512 frames at 48 kHz is about
+// 10.7 ms, which fits a typical WASAPI shared-mode period. The engine still
+// renders internally in periods of at most DEFAULT_BUFFER_SIZE. _WIN32 is the
+// compiler macro so this stays correct even in headers that do not include
+// lmmsconfig.h.
+#if defined(_WIN32)
+constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 48000;
+constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = 512;
+#else
+constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 44100;
+constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = DEFAULT_BUFFER_SIZE;
+#endif
+
 constexpr int BYTES_PER_SAMPLE = sizeof(sample_t);
 constexpr int BYTES_PER_INT_SAMPLE = sizeof(int_sample_t);
 constexpr int BYTES_PER_FRAME = sizeof(SampleFrame);

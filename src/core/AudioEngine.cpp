@@ -32,6 +32,7 @@
 #include "AudioBusHandle.h"
 #include "Hardware.h"
 #include "Mixer.h"
+#include "MmThread.h"
 #include "Song.h"
 #include "EnvelopeAndLfoParameters.h"
 #include "NotePlayHandle.h"
@@ -68,11 +69,12 @@ AudioEngine::AudioEngine(bool renderOnly)
 	: m_renderOnly(renderOnly)
 	, m_framesPerAudioBuffer(std::clamp(
 		static_cast<f_cnt_t>(ConfigManager::inst()->value("audioengine", "framesperaudiobuffer",
-		QString::number(DEFAULT_BUFFER_SIZE)).toUInt()),
+		QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toUInt()),
 		MINIMUM_BUFFER_SIZE, MAXIMUM_BUFFER_SIZE))
 	, m_framesPerPeriod(std::min(m_framesPerAudioBuffer, DEFAULT_BUFFER_SIZE))
-	, m_baseSampleRate(
-		std::max(ConfigManager::inst()->value("audioengine", "samplerate").toInt(), SUPPORTED_SAMPLERATES.front()))
+	, m_baseSampleRate(static_cast<sample_rate_t>(std::max(
+		ConfigManager::inst()->value("audioengine", "samplerate", QString::number(DEFAULT_SAMPLE_RATE)).toInt(),
+		SUPPORTED_SAMPLERATES.front())))
 	, m_inputBufferRead(0)
 	, m_inputBufferWrite(1)
 	, m_outputBufferRead(nullptr)
@@ -317,6 +319,14 @@ void AudioEngine::renderStageMix()
 
 std::span<const SampleFrame> AudioEngine::renderNextPeriod()
 {
+	// The device callback (and the inline worker it runs) never enters
+	// AudioEngineWorkerThread::run(), so register that thread here.
+	[[maybe_unused]] thread_local const MmThreadRegistration mmcssRegistration;
+	[[maybe_unused]] thread_local const bool denormalsDisabled = [] {
+		disableDenormals();
+		return true;
+	}();
+
 	const auto lock = std::lock_guard{m_changeMutex};
 
 	m_profiler.startPeriod();
@@ -689,6 +699,26 @@ AudioDevice * AudioEngine::tryAudioDevices()
 
 	m_audioDevStartFailed = false;
 
+	// Onboard Realtek has no ASIO driver. Prefer PortAudio so an unset device
+	// starts on WASAPI instead of SDL. An explicit choice is still honored below.
+#ifdef LMMS_HAVE_PORTAUDIO
+	bool triedPortAudio = false;
+#ifdef LMMS_BUILD_WIN32
+	if (dev_name.isEmpty())
+	{
+		triedPortAudio = true;
+		dev = new AudioPortAudio(success_ful, this);
+		if (success_ful)
+		{
+			m_audioDevName = AudioPortAudio::name();
+			return dev;
+		}
+		delete dev;
+		dev = nullptr;
+	}
+#endif
+#endif
+
 #ifdef LMMS_HAVE_SDL
 	if( dev_name == AudioSdl::name() || dev_name == "" )
 	{
@@ -759,7 +789,7 @@ AudioDevice * AudioEngine::tryAudioDevices()
 
 
 #ifdef LMMS_HAVE_PORTAUDIO
-	if (dev_name == AudioPortAudio::name() || dev_name.isEmpty())
+	if (!triedPortAudio && (dev_name == AudioPortAudio::name() || dev_name.isEmpty()))
 	{
 		dev = new AudioPortAudio( success_ful, this );
 		if( success_ful )

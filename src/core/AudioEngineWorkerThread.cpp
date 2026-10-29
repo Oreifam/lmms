@@ -30,6 +30,7 @@
 
 #include "AudioEngine.h"
 #include "Hardware.h"
+#include "MmThread.h"
 #include "ThreadableJob.h"
 
 
@@ -158,6 +159,9 @@ void AudioEngineWorkerThread::startAndWaitForJobs()
 
 void AudioEngineWorkerThread::run()
 {
+	// Keep the registration alive for the thread. The last worker runs inline
+	// on the device callback thread and is registered from renderNextPeriod().
+	[[maybe_unused]] const MmThreadRegistration mmcssRegistration;
 	disableDenormals();
 
 	QMutex m;

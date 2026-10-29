@@ -31,6 +31,7 @@
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QLabel>
 #include <QString>
 #include <QWidget>
 #include <portaudio.h>
@@ -100,10 +101,20 @@ public:
 	void saveSettings() override;
 
 private:
+	void updateWasapiOptions(const QString& backendName);
+	void updateWasapiLatency();
+
 	class DeviceSelectorWidget;
 	QComboBox* m_backendComboBox = nullptr;
 	DeviceSelectorWidget* m_inputDevice = nullptr;
 	DeviceSelectorWidget* m_outputDevice = nullptr;
+#ifdef LMMS_BUILD_WIN32
+	QLabel* m_wasapiModeLabel = nullptr;
+	QComboBox* m_wasapiModeComboBox = nullptr;
+	QLabel* m_wasapiFramesLabel = nullptr;
+	QComboBox* m_wasapiFramesComboBox = nullptr;
+	QLabel* m_wasapiLatencyLabel = nullptr;
+#endif
 };
 } // namespace lmms::gui
 

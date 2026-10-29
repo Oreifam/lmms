@@ -140,11 +140,11 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 	m_disableAutoQuit(ConfigManager::inst()->value(
 			"ui", "disableautoquit", "1").toInt()),
 	m_bufferSize(ConfigManager::inst()->value(
-			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_BUFFER_SIZE)).toInt()),
+			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toInt()),
 	m_mixSanitization(ConfigManager::inst()->value(
 			"audioengine", "sanitizemix", "1").toInt()),
 	m_sampleRate(ConfigManager::inst()->value(
-			"audioengine", "samplerate").toInt()),
+			"audioengine", "samplerate", QString::number(DEFAULT_SAMPLE_RATE)).toInt()),
 	m_midiAutoQuantize(ConfigManager::inst()->value(
 			"midi", "autoquantize", "0").toInt() != 0),
 	m_workingDir(QDir::toNativeSeparators(ConfigManager::inst()->workingDir())),
@@ -602,7 +602,7 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 		[setSampleRate](int value) { setSampleRate(SUPPORTED_SAMPLERATES[value]); });
 
 	connect(sampleRateResetButton, &QPushButton::clicked, this,
-		[setSampleRate] { setSampleRate(SUPPORTED_SAMPLERATES.front()); });
+		[setSampleRate] { setSampleRate(DEFAULT_SAMPLE_RATE); });
 
 	// Buffer size group
 	QGroupBox * bufferSizeBox = new QGroupBox(tr("Buffer size"), audio_w);
@@ -1292,7 +1292,7 @@ void SetupDialog::setBufferSize(int value)
 
 void SetupDialog::resetBufferSize()
 {
-	setBufferSize(DEFAULT_BUFFER_SIZE / BUFFERSIZE_RESOLUTION);
+	setBufferSize(DEFAULT_AUDIO_BUFFER_SIZE / BUFFERSIZE_RESOLUTION);
 }
 
 
