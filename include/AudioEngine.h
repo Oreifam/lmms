@@ -55,14 +55,15 @@ constexpr f_cnt_t MINIMUM_BUFFER_SIZE = 32;
 constexpr f_cnt_t DEFAULT_BUFFER_SIZE = 256;
 constexpr f_cnt_t MAXIMUM_BUFFER_SIZE = 4096;
 
-// Sample rate used when the user has not chosen one. Windows defaults to
-// 48 kHz because WASAPI shared mode follows the device mix format, which is
-// 48 kHz on typical onboard Realtek hardware. The device buffer size stays
-// DEFAULT_BUFFER_SIZE so SDL is unchanged; WASAPI snaps that size separately.
+// Unset audio defaults. Windows uses 48 kHz and 512 frames so the settings
+// slider and WASAPI open the same buffer. A WASAPI-only 512 would be overwritten
+// the first time any setting is saved, because the dialog writes this value.
 #ifdef LMMS_BUILD_WIN32
 constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 48000;
+constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = 512;
 #else
 constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 44100;
+constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = DEFAULT_BUFFER_SIZE;
 #endif
 
 constexpr int BYTES_PER_SAMPLE = sizeof(sample_t);

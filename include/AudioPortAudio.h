@@ -81,8 +81,12 @@ public:
 
 	//! What the running stream actually opened (rate, mode, latency). Empty if none.
 	static auto openStatus() -> QString;
-	//! Shown once at startup when the opened stream differs from the request.
+	//! Notice for this open. Empty when the stream matches the request.
 	static auto startupNotice() -> QString;
+	//! Notice if it has not already been shown for the current audio settings.
+	static auto unseenStartupNotice() -> QString;
+	//! Remember that the current settings' notice was shown.
+	static void acknowledgeStartupNotice();
 
 private:
 	void startProcessingImpl() override;
@@ -93,8 +97,11 @@ private:
 
 	detail::PortAudioInitializationGuard m_initGuard;
 	PaStream* m_paStream = nullptr;
+	// WASAPI's own thread calls PaWasapi_ThreadPriorityBoost. Skip our registration there.
+	bool m_skipCallbackMmcss = false;
 	static QString s_openStatus;
 	static QString s_startupNotice;
+	static QString s_noticeSignature;
 #ifdef LMMS_BUILD_WIN32
 	// Enough to reopen shared mode if exclusive Pa_StartStream fails.
 	bool m_wasapiExclusive = false;

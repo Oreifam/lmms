@@ -490,9 +490,10 @@ void MainWindow::finalize()
 		sd.exec();
 	}
 #ifdef LMMS_HAVE_PORTAUDIO
-	else if (const auto notice = AudioPortAudio::startupNotice(); !notice.isEmpty())
+	else if (const auto notice = AudioPortAudio::unseenStartupNotice(); !notice.isEmpty())
 	{
 		QMessageBox::information(this, tr("Audio device"), notice);
+		AudioPortAudio::acknowledgeStartupNotice();
 	}
 #endif // LMMS_HAVE_PORTAUDIO
 

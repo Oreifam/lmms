@@ -70,7 +70,7 @@ AudioEngine::AudioEngine(bool renderOnly)
 	: m_renderOnly(renderOnly)
 	, m_framesPerAudioBuffer(std::clamp(
 		static_cast<f_cnt_t>(ConfigManager::inst()->value("audioengine", "framesperaudiobuffer",
-		QString::number(DEFAULT_BUFFER_SIZE)).toUInt()),
+		QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toUInt()),
 		MINIMUM_BUFFER_SIZE, MAXIMUM_BUFFER_SIZE))
 	, m_framesPerPeriod(std::min(m_framesPerAudioBuffer, DEFAULT_BUFFER_SIZE))
 	, m_baseSampleRate(static_cast<sample_rate_t>(std::max(
