@@ -159,8 +159,7 @@ void AudioEngineWorkerThread::startAndWaitForJobs()
 
 void AudioEngineWorkerThread::run()
 {
-	// Keep the registration alive for the thread. The last worker runs inline
-	// on the device callback thread and is registered from renderNextPeriod().
+	// Default MMCSS priority. The callback thread, not these workers, is the deadline.
 	[[maybe_unused]] const MmThreadRegistration mmcssRegistration;
 	disableDenormals();
 

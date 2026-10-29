@@ -79,6 +79,11 @@ public:
 
 	static auto name() -> QString { return QT_TRANSLATE_NOOP("AudioDeviceSetupWidget", "PortAudio"); }
 
+	//! What the running stream actually opened (rate, mode, latency). Empty if none.
+	static auto openStatus() -> QString;
+	//! Shown once at startup when the opened stream differs from the request.
+	static auto startupNotice() -> QString;
+
 private:
 	void startProcessingImpl() override;
 	void stopProcessingImpl() override;
@@ -88,6 +93,18 @@ private:
 
 	detail::PortAudioInitializationGuard m_initGuard;
 	PaStream* m_paStream = nullptr;
+	static QString s_openStatus;
+	static QString s_startupNotice;
+#ifdef LMMS_BUILD_WIN32
+	// Enough to reopen shared mode if exclusive Pa_StartStream fails.
+	bool m_wasapiExclusive = false;
+	PaDeviceIndex m_wasapiInputDevice = paNoDevice;
+	int m_wasapiInputChannels = 0;
+	PaDeviceIndex m_wasapiOutputDevice = paNoDevice;
+	int m_wasapiOutputChannels = 0;
+	double m_wasapiRequestedRate = 0;
+	unsigned long m_wasapiFrames = 0;
+#endif
 };
 } // namespace lmms
 
@@ -102,18 +119,15 @@ public:
 
 private:
 	void updateWasapiOptions(const QString& backendName);
-	void updateWasapiLatency();
 
 	class DeviceSelectorWidget;
 	QComboBox* m_backendComboBox = nullptr;
 	DeviceSelectorWidget* m_inputDevice = nullptr;
 	DeviceSelectorWidget* m_outputDevice = nullptr;
+	QLabel* m_openStatusLabel = nullptr;
 #ifdef LMMS_BUILD_WIN32
 	QLabel* m_wasapiModeLabel = nullptr;
 	QComboBox* m_wasapiModeComboBox = nullptr;
-	QLabel* m_wasapiFramesLabel = nullptr;
-	QComboBox* m_wasapiFramesComboBox = nullptr;
-	QLabel* m_wasapiLatencyLabel = nullptr;
 #endif
 };
 } // namespace lmms::gui

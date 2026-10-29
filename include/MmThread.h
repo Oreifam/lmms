@@ -34,7 +34,9 @@ namespace lmms
 class MmThreadRegistration
 {
 public:
-	MmThreadRegistration();
+	// raisePriority is for the device callback only. Worker threads keep the
+	// task's default priority so a 4-core machine is not packed with HIGH threads.
+	explicit MmThreadRegistration(bool raisePriority = false);
 	~MmThreadRegistration();
 
 	MmThreadRegistration(const MmThreadRegistration&) = delete;

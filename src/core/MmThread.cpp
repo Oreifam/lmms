@@ -34,8 +34,9 @@
 #include <windows.h>
 #include <avrt.h>
 
+#include <QDebug>
+
 #include <atomic>
-#include <iostream>
 #endif
 
 namespace lmms
@@ -43,19 +44,29 @@ namespace lmms
 
 #if defined(_WIN32)
 
-MmThreadRegistration::MmThreadRegistration()
+MmThreadRegistration::MmThreadRegistration(bool raisePriority)
 {
 	DWORD taskIndex = 0;
 	m_handle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
-	if (!m_handle) { return; }
-
-	// HIGH is the usual Pro Audio priority. CRITICAL starves a 4-core 15 W CPU.
-	AvSetMmThreadPriority(static_cast<HANDLE>(m_handle), AVRT_PRIORITY_HIGH);
-
-	static std::atomic_flag logged = ATOMIC_FLAG_INIT;
-	if (!logged.test_and_set(std::memory_order_relaxed))
+	if (!m_handle)
 	{
-		std::cerr << "MMCSS: registered audio thread as \"Pro Audio\"\n";
+		static std::atomic_flag logged = ATOMIC_FLAG_INIT;
+		if (!logged.test_and_set(std::memory_order_relaxed))
+		{
+			qWarning("MMCSS: AvSetMmThreadCharacteristics(\"Pro Audio\") failed, GetLastError=%lu", GetLastError());
+		}
+		return;
+	}
+
+	if (!raisePriority) { return; }
+
+	if (!AvSetMmThreadPriority(static_cast<HANDLE>(m_handle), AVRT_PRIORITY_HIGH))
+	{
+		static std::atomic_flag logged = ATOMIC_FLAG_INIT;
+		if (!logged.test_and_set(std::memory_order_relaxed))
+		{
+			qWarning("MMCSS: AvSetMmThreadPriority(HIGH) failed, GetLastError=%lu", GetLastError());
+		}
 	}
 }
 
@@ -66,7 +77,7 @@ MmThreadRegistration::~MmThreadRegistration()
 
 #else
 
-MmThreadRegistration::MmThreadRegistration() = default;
+MmThreadRegistration::MmThreadRegistration(bool) {}
 MmThreadRegistration::~MmThreadRegistration() = default;
 
 #endif

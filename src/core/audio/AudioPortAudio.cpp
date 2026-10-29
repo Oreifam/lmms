@@ -30,10 +30,11 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#endif
+#endif // _WIN32
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <iostream>
 #include <vector>
 
@@ -41,6 +42,7 @@
 
 #ifdef LMMS_HAVE_PORTAUDIO
 
+#include <QDebug>
 #include <QLabel>
 
 #include "AudioEngine.h"
@@ -74,11 +76,6 @@ constexpr auto backendAttribute()
 constexpr auto wasapiModeAttribute()
 {
 	return "wasapimode";
-}
-
-constexpr auto wasapiFramesAttribute()
-{
-	return "wasapiframes";
 }
 
 constexpr auto wasapiHostApiName()
@@ -224,9 +221,16 @@ struct OpenedStream
 	PaStream* stream = nullptr;
 	double sampleRate = 0;
 	unsigned long frames = 0;
+	double outputLatency = 0;
 	bool exclusive = false;
 	bool fellBackToShared = false;
+	bool autoConvert = false;
+	bool withInput = false;
 	int outputChannels = 0;
+	int attemptCount = 0;
+	int formatRejected = 0;
+	int openFailed = 0;
+	PaError lastError = paNoError;
 };
 
 auto openGenericStream(PaDeviceIndex inputDevice, int inputChannels, PaDeviceIndex outputDevice, int outputChannels,
@@ -269,6 +273,12 @@ auto openGenericStream(PaDeviceIndex inputDevice, int inputChannels, PaDeviceInd
 		return {};
 	}
 
+	opened.withInput = inputDevice != paNoDevice;
+	if (const auto* streamInfo = Pa_GetStreamInfo(opened.stream))
+	{
+		opened.sampleRate = streamInfo->sampleRate;
+		opened.outputLatency = streamInfo->outputLatency;
+	}
 	return opened;
 }
 
@@ -284,13 +294,18 @@ struct WasapiAttempt
 
 auto wasapiFrameOrder(unsigned long preferred) -> std::array<unsigned long, 3>
 {
-	// Ask for the chosen size first, then larger sizes. Shared mode rejects a
-	// buffer shorter than the engine period (often ~10 ms, sometimes ~20 ms).
-	std::array<unsigned long, 3> order{preferred, 0, 0};
-	auto index = std::size_t{1};
+	// Preferred size, then larger sizes ascending, then smaller sizes.
+	// 256 -> 256, 512, 1024. 512 -> 512, 1024, 256. 1024 -> 1024, 512, 256.
+	std::array<unsigned long, 3> order{};
+	auto index = 0;
+	order[index++] = preferred;
+	for (const auto frames : {256ul, 512ul, 1024ul})
+	{
+		if (frames > preferred) { order[index++] = frames; }
+	}
 	for (const auto frames : {1024ul, 512ul, 256ul})
 	{
-		if (frames != preferred) { order[index++] = frames; }
+		if (frames < preferred) { order[index++] = frames; }
 	}
 	return order;
 }
@@ -338,32 +353,41 @@ auto openWasapiStream(PaDeviceIndex inputDevice, int inputChannels, PaDeviceInde
 		}
 	};
 
-	if (wantExclusive)
-	{
-		for (const auto rate : rates) { addMode(true, false, hasInput, rate); }
-		if (hasInput)
+	// Keep a configured input as long as possible. Shared full-duplex is tried
+	// before any exclusive output-only open, and auto-convert is tried at the
+	// requested rate before switching to the device mix rate.
+	auto addPass = [&](bool exclusive, bool withInput) {
+		addMode(exclusive, false, withInput, requestedRate);
+		if (!exclusive) { addMode(false, true, withInput, requestedRate); }
+		for (const auto rate : rates)
 		{
-			for (const auto rate : rates) { addMode(true, false, false, rate); }
+			if (rate == requestedRate) { continue; }
+			addMode(exclusive, false, withInput, rate);
 		}
-	}
+		if (!exclusive)
+		{
+			for (const auto rate : rates)
+			{
+				if (rate == requestedRate) { continue; }
+				addMode(false, true, withInput, rate);
+			}
+		}
+	};
+	if (wantExclusive && hasInput) { addPass(true, true); }
+	if (hasInput) { addPass(false, true); }
+	if (wantExclusive) { addPass(true, false); }
+	addPass(false, false);
 
-	for (const auto rate : rates) { addMode(false, false, hasInput, rate); }
-	if (hasInput)
-	{
-		for (const auto rate : rates) { addMode(false, false, false, rate); }
-	}
-	// Shared-mode SRC. Lets a project rate that is not the mix format still play.
-	for (const auto rate : rates) { addMode(false, true, false, rate); }
-
-	PaError lastError = paNoError;
+	OpenedStream failed;
+	failed.attemptCount = static_cast<int>(attempts.size());
 	for (const auto& attempt : attempts)
 	{
 		PaWasapiStreamInfo wasapiInfo{};
 		wasapiInfo.size = sizeof(wasapiInfo);
 		wasapiInfo.hostApiType = paWASAPI;
 		wasapiInfo.version = 1;
-		wasapiInfo.flags = paWinWasapiThreadPriority;
-		wasapiInfo.threadPriority = eThreadPriorityProAudio;
+		// MMCSS is registered once from processCallback. Do not also set
+		// paWinWasapiThreadPriority, or this thread joins Pro Audio twice.
 		if (attempt.exclusive) { wasapiInfo.flags |= paWinWasapiExclusive; }
 		if (attempt.autoConvert) { wasapiInfo.flags |= paWinWasapiAutoConvert; }
 
@@ -396,7 +420,8 @@ auto openWasapiStream(PaDeviceIndex inputDevice, int inputChannels, PaDeviceInde
 		const auto supported = Pa_IsFormatSupported(inputParametersPtr, &outputParameters, attempt.sampleRate);
 		if (supported != paFormatIsSupported)
 		{
-			lastError = supported;
+			failed.lastError = supported;
+			++failed.formatRejected;
 			continue;
 		}
 
@@ -405,10 +430,8 @@ auto openWasapiStream(PaDeviceIndex inputDevice, int inputChannels, PaDeviceInde
 			attempt.frames, paNoFlag, callback, userData);
 		if (err != paNoError || !stream)
 		{
-			lastError = err;
-			std::cerr << "WASAPI: failed to open " << (attempt.exclusive ? "exclusive" : "shared") << " mode at "
-					  << attempt.sampleRate << " Hz / " << attempt.frames << " frames: " << Pa_GetErrorText(err)
-					  << '\n';
+			failed.lastError = err;
+			++failed.openFailed;
 			continue;
 		}
 
@@ -418,20 +441,74 @@ auto openWasapiStream(PaDeviceIndex inputDevice, int inputChannels, PaDeviceInde
 		opened.frames = attempt.frames;
 		opened.exclusive = attempt.exclusive;
 		opened.fellBackToShared = wantExclusive && !attempt.exclusive;
+		opened.autoConvert = attempt.autoConvert;
+		opened.withInput = attempt.withInput;
 		opened.outputChannels = outputChannels;
-
-		std::cerr << "WASAPI: opened " << (attempt.exclusive ? "exclusive" : "shared") << " mode, "
-				  << outputInfo->name << ", " << attempt.sampleRate << " Hz, " << attempt.frames << " frames";
-		if (attempt.autoConvert) { std::cerr << ", Windows format conversion"; }
-		if (attempt.withInput) { std::cerr << ", full duplex"; }
-		std::cerr << '\n';
+		opened.attemptCount = failed.attemptCount;
+		opened.formatRejected = failed.formatRejected;
+		opened.openFailed = failed.openFailed;
+		if (const auto* streamInfo = Pa_GetStreamInfo(stream))
+		{
+			opened.sampleRate = streamInfo->sampleRate;
+			opened.outputLatency = streamInfo->outputLatency;
+		}
 		return opened;
 	}
 
-	std::cerr << "WASAPI: could not open an output stream (" << Pa_GetErrorText(lastError) << ")\n";
-	return {};
+	qWarning("WASAPI: no stream after %d attempts (format rejected %d, open failed %d, last error %s)",
+		failed.attemptCount, failed.formatRejected, failed.openFailed, Pa_GetErrorText(failed.lastError));
+	return failed;
 }
-#endif
+#endif // LMMS_BUILD_WIN32
+
+struct OpenReport
+{
+	QString status;
+	QString notice;
+};
+
+auto makeOpenReport(const OpenedStream& opened, double requestedRate, unsigned long requestedFrames, bool wantExclusive,
+	bool hadInput, const char* apiName) -> OpenReport
+{
+	const auto openedRate = static_cast<int>(opened.sampleRate + 0.5);
+	const auto askedRate = static_cast<int>(requestedRate + 0.5);
+	const auto latencyMs = opened.outputLatency * 1000.0;
+	const auto mode = opened.exclusive ? QStringLiteral("exclusive") : QStringLiteral("shared");
+
+	OpenReport report;
+	report.status = QStringLiteral("%1 %2, %3 Hz, %4 frames, output latency %5 ms")
+						.arg(QString::fromUtf8(apiName), mode)
+						.arg(openedRate)
+						.arg(static_cast<qulonglong>(opened.frames))
+						.arg(latencyMs, 0, 'f', 1);
+	if (opened.autoConvert) { report.status += QStringLiteral(". Windows format conversion is on"); }
+	if (opened.withInput) { report.status += QStringLiteral(". Input is open"); }
+
+	QStringList notes;
+	if (wantExclusive && !opened.exclusive)
+	{
+		notes.append(QStringLiteral("Exclusive mode did not open. Using shared mode."));
+	}
+	if (hadInput && !opened.withInput)
+	{
+		notes.append(QStringLiteral("Recording input was not opened. Output continues without it."));
+	}
+	if (openedRate != askedRate)
+	{
+		notes.append(QStringLiteral(
+			"Requested %1 Hz. Opened %2 Hz because %1 Hz could not be started, including with Windows format conversion.")
+						 .arg(askedRate)
+						 .arg(openedRate));
+	}
+	if (opened.frames != requestedFrames)
+	{
+		notes.append(QStringLiteral("Requested %1 frames. Opened %2 frames.")
+						 .arg(static_cast<qulonglong>(requestedFrames))
+						 .arg(static_cast<qulonglong>(opened.frames)));
+	}
+	report.notice = notes.join(QStringLiteral("\n"));
+	return report;
+}
 
 } // namespace
 
@@ -483,40 +560,66 @@ AudioPortAudio::AudioPortAudio(bool& successful, AudioEngine* engine)
 	{
 		const auto mode = ConfigManager::inst()->value(tag(), wasapiModeAttribute(), QStringLiteral("shared"));
 		const auto wantExclusive = mode.compare(QStringLiteral("exclusive"), Qt::CaseInsensitive) == 0;
-		const auto configuredFrames = ConfigManager::inst()->value(tag(), wasapiFramesAttribute(),
-			QString::number(static_cast<int>(defaultWasapiFrames))).toUInt();
-		const auto frames = snapWasapiFrames(configuredFrames == 0
+		const auto bufferSetting = ConfigManager::inst()->value("audioengine", "framesperaudiobuffer");
+		const auto frames = snapWasapiFrames(bufferSetting.isEmpty()
 			? defaultWasapiFrames
-			: static_cast<unsigned long>(configuredFrames));
+			: static_cast<unsigned long>(engine->framesPerAudioBuffer()));
+		m_wasapiInputDevice = inputDevice;
+		m_wasapiInputChannels = inputChannels;
+		m_wasapiOutputDevice = outputDevice;
+		m_wasapiOutputChannels = outputChannels;
+		m_wasapiRequestedRate = sampleRate;
+		m_wasapiFrames = frames;
 		opened = openWasapiStream(inputDevice, inputChannels, outputDevice, outputChannels, sampleRate, frames,
 			wantExclusive, &AudioPortAudio::processCallback, this);
-		if (opened.fellBackToShared)
+		m_wasapiExclusive = opened.exclusive;
+		if (opened.stream)
 		{
-			std::cerr << "WASAPI: exclusive mode was not available, using shared mode\n";
+			const auto hadInput = inputDevice != paNoDevice && inputChannels > 0;
+			const auto report = makeOpenReport(opened, sampleRate, frames, wantExclusive, hadInput, "WASAPI");
+			s_openStatus = report.status;
+			s_startupNotice = report.notice;
 		}
 	}
 	else
-#endif
+#endif // LMMS_BUILD_WIN32
 	{
 		// MME and DirectSound keep the period size that the PortAudio refactor settled on.
-		// WASAPI uses its own 256/512/1024 frame setting above.
-		opened = openGenericStream(inputDevice, inputChannels, outputDevice, outputChannels, sampleRate,
-			static_cast<unsigned long>(engine->framesPerPeriod()), &AudioPortAudio::processCallback, this);
+		const auto frames = static_cast<unsigned long>(engine->framesPerPeriod());
+		opened = openGenericStream(inputDevice, inputChannels, outputDevice, outputChannels, sampleRate, frames,
+			&AudioPortAudio::processCallback, this);
+		if (opened.stream)
+		{
+			const auto hadInput = inputDevice != paNoDevice && inputChannels > 0;
+			const auto apiName = hostApiInfo ? hostApiInfo->name : "PortAudio";
+			const auto report = makeOpenReport(opened, sampleRate, frames, false, hadInput, apiName);
+			s_openStatus = report.status;
+			s_startupNotice = report.notice;
+		}
 	}
+
+	if (!s_openStatus.isEmpty()) { qWarning("%s", qUtf8Printable(s_openStatus)); }
+	if (!s_startupNotice.isEmpty()) { qWarning("%s", qUtf8Printable(s_startupNotice)); }
 
 	if (!opened.stream) { return; }
 
 	m_paStream = opened.stream;
-
-	if (static_cast<sample_rate_t>(opened.sampleRate + 0.5) != engine->baseSampleRate())
-	{
-		std::cerr << "PortAudio: opened at " << opened.sampleRate << " Hz because " << sampleRate
-				  << " Hz is not supported by this device. Set the sample rate in Audio settings to match.\n";
-	}
-
 	successful = true;
 	setSampleRate(static_cast<sample_rate_t>(opened.sampleRate + 0.5));
 	setChannels(opened.outputChannels);
+}
+
+QString AudioPortAudio::s_openStatus;
+QString AudioPortAudio::s_startupNotice;
+
+auto AudioPortAudio::openStatus() -> QString
+{
+	return s_openStatus;
+}
+
+auto AudioPortAudio::startupNotice() -> QString
+{
+	return s_startupNotice;
 }
 
 AudioPortAudio::~AudioPortAudio()
@@ -527,7 +630,48 @@ AudioPortAudio::~AudioPortAudio()
 
 void AudioPortAudio::startProcessingImpl()
 {
-	if (m_paStream) { Pa_StartStream(m_paStream); }
+	if (!m_paStream) { return; }
+
+	const auto err = Pa_StartStream(m_paStream);
+	if (err == paNoError) { return; }
+
+	qWarning("PortAudio: Pa_StartStream failed: %s", Pa_GetErrorText(err));
+
+#ifdef LMMS_BUILD_WIN32
+	if (!m_wasapiExclusive) { return; }
+
+	Pa_CloseStream(m_paStream);
+	m_paStream = nullptr;
+	m_wasapiExclusive = false;
+	auto opened = openWasapiStream(m_wasapiInputDevice, m_wasapiInputChannels, m_wasapiOutputDevice,
+		m_wasapiOutputChannels, m_wasapiRequestedRate, m_wasapiFrames, false, &AudioPortAudio::processCallback, this);
+	if (!opened.stream)
+	{
+		s_startupNotice = QStringLiteral(
+			"Exclusive mode opened but did not start, and shared mode could not be opened.");
+		s_openStatus = s_startupNotice;
+		qWarning("%s", qUtf8Printable(s_startupNotice));
+		return;
+	}
+
+	const auto hadInput = m_wasapiInputDevice != paNoDevice && m_wasapiInputChannels > 0;
+	const auto report = makeOpenReport(opened, m_wasapiRequestedRate, m_wasapiFrames, true, hadInput, "WASAPI");
+	s_openStatus = report.status;
+	s_startupNotice = report.notice.isEmpty()
+		? QStringLiteral("Exclusive mode opened but did not start. Switched to shared mode.")
+		: report.notice;
+	qWarning("%s", qUtf8Printable(s_openStatus));
+	qWarning("%s", qUtf8Printable(s_startupNotice));
+
+	const auto previousRate = sampleRate();
+	m_paStream = opened.stream;
+	setSampleRate(static_cast<sample_rate_t>(opened.sampleRate + 0.5));
+	setChannels(opened.outputChannels);
+	if (sampleRate() != previousRate) { audioEngine()->notifyDeviceSampleRateChanged(); }
+
+	const auto retry = Pa_StartStream(m_paStream);
+	if (retry != paNoError) { qWarning("PortAudio: shared Pa_StartStream failed: %s", Pa_GetErrorText(retry)); }
+#endif // LMMS_BUILD_WIN32
 }
 
 void AudioPortAudio::stopProcessingImpl()
@@ -538,7 +682,7 @@ void AudioPortAudio::stopProcessingImpl()
 int AudioPortAudio::processCallback(const void*, void* output, unsigned long frameCount,
 	const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void* userData)
 {
-	[[maybe_unused]] thread_local const MmThreadRegistration mmcssRegistration;
+	[[maybe_unused]] thread_local const MmThreadRegistration mmcssRegistration{true};
 
 	const auto device = static_cast<AudioPortAudio*>(userData);
 	if (!device || !output)
@@ -586,6 +730,7 @@ public:
 		using namespace lmms;
 
 		m_deviceComboBox->clear();
+		if (m_direction == Direction::Input) { m_deviceComboBox->addItem(tr("[None]"), -1); }
 
 		for (auto i = 0, deviceCount = Pa_GetDeviceCount(); i < deviceCount; ++i)
 		{
@@ -598,9 +743,16 @@ public:
 		}
 
 		const auto selectedDeviceName = ConfigManager::inst()->value(tag(), deviceNameAttribute(m_direction));
-		const auto selectedDeviceIndex = std::max(0, m_deviceComboBox->findText(selectedDeviceName));
 		if (m_deviceComboBox->count() == 0) { return; }
-		m_deviceComboBox->setCurrentIndex(selectedDeviceIndex);
+		if (m_direction == Direction::Input && selectedDeviceName.isEmpty())
+		{
+			m_deviceComboBox->setCurrentIndex(0);
+			return;
+		}
+		const auto found = m_deviceComboBox->findText(selectedDeviceName);
+		if (found >= 0) { m_deviceComboBox->setCurrentIndex(found); }
+		else if (m_direction == Direction::Input) { m_deviceComboBox->setCurrentIndex(0); }
+		else { m_deviceComboBox->setCurrentIndex(0); }
 	}
 
 	void refreshChannels(PaDeviceIndex deviceIndex)
@@ -616,8 +768,13 @@ public:
 
 	void saveToConfig()
 	{
-		ConfigManager::inst()->setValue(tag(), deviceNameAttribute(m_direction), m_deviceComboBox->currentText());
-		ConfigManager::inst()->setValue(tag(), channelsAttribute(m_direction), QString::number(m_channelModel.value()));
+		const auto device = m_deviceComboBox->currentData().toInt();
+		const auto name = m_direction == Direction::Input && device < 0 ? QString{} : m_deviceComboBox->currentText();
+		ConfigManager::inst()->setValue(tag(), deviceNameAttribute(m_direction), name);
+		if (device >= 0)
+		{
+			ConfigManager::inst()->setValue(tag(), channelsAttribute(m_direction), QString::number(m_channelModel.value()));
+		}
 	}
 
 private:
@@ -648,38 +805,20 @@ AudioPortAudioSetupWidget::AudioPortAudioSetupWidget(QWidget* parent)
 	m_wasapiModeComboBox->setToolTip(tr(
 		"Shared mode keeps Windows audio mixing and works alongside other programs. "
 		"Exclusive mode takes the device and can reach lower latency. "
-		"If exclusive mode cannot start, playback falls back to shared mode."));
-
-	m_wasapiFramesLabel = new QLabel{tr("WASAPI buffer"), this};
-	m_wasapiFramesComboBox = new QComboBox{this};
-	m_wasapiFramesComboBox->addItem(tr("256 frames"), 256);
-	m_wasapiFramesComboBox->addItem(tr("512 frames"), 512);
-	m_wasapiFramesComboBox->addItem(tr("1024 frames"), 1024);
-	m_wasapiFramesComboBox->setToolTip(tr(
-		"At 48 kHz, 256 frames is about 5.3 ms (best with exclusive mode), "
-		"512 frames is about 10.7 ms (default, suits onboard Realtek shared mode), "
-		"and 1024 frames is about 21.3 ms."));
-
-	m_wasapiLatencyLabel = new QLabel{this};
+		"If exclusive mode cannot start, playback falls back to shared mode. "
+		"Buffer size follows the Audio settings slider, snapped to 256, 512, or 1024 frames. "
+		"A new setup uses 512 frames for WASAPI."));
 
 	const auto savedMode = ConfigManager::inst()->value(tag(), wasapiModeAttribute(), QStringLiteral("shared"));
 	const auto modeIndex = m_wasapiModeComboBox->findData(savedMode);
 	m_wasapiModeComboBox->setCurrentIndex(modeIndex < 0 ? 0 : modeIndex);
 
-	const auto savedFrames = ConfigManager::inst()->value(tag(), wasapiFramesAttribute(),
-		QString::number(defaultWasapiFrames)).toInt();
-	const auto framesIndex = m_wasapiFramesComboBox->findData(savedFrames);
-	m_wasapiFramesComboBox->setCurrentIndex(framesIndex < 0 ? 1 : framesIndex);
-
 	form->addRow(m_wasapiModeLabel, m_wasapiModeComboBox);
-	form->addRow(m_wasapiFramesLabel, m_wasapiFramesComboBox);
-	form->addRow(QString{}, m_wasapiLatencyLabel);
+#endif // LMMS_BUILD_WIN32
 
-	connect(m_wasapiFramesComboBox, qOverload<int>(&QComboBox::currentIndexChanged), this,
-		[this](int) { updateWasapiLatency(); });
-	updateWasapiLatency();
-#endif
-
+	m_openStatusLabel = new QLabel{this};
+	m_openStatusLabel->setWordWrap(true);
+	form->addRow(m_openStatusLabel);
 	form->addRow(m_outputDevice);
 	form->addRow(m_inputDevice);
 
@@ -696,32 +835,12 @@ AudioPortAudioSetupWidget::AudioPortAudioSetupWidget(QWidget* parent)
 	updateWasapiOptions({});
 }
 
-void AudioPortAudioSetupWidget::updateWasapiLatency()
-{
-#ifdef LMMS_BUILD_WIN32
-	const auto frames = m_wasapiFramesComboBox->currentData().toInt();
-	const auto rate = ConfigManager::inst()->value("audioengine", "samplerate",
-		QString::number(DEFAULT_SAMPLE_RATE)).toDouble();
-	if (frames <= 0 || rate <= 0.0)
-	{
-		m_wasapiLatencyLabel->clear();
-		return;
-	}
-
-	const auto ms = 1000.0 * static_cast<double>(frames) / rate;
-	m_wasapiLatencyLabel->setText(tr("About %1 ms at %2 Hz").arg(ms, 0, 'f', 1).arg(static_cast<int>(rate)));
-#endif
-}
-
 void AudioPortAudioSetupWidget::updateWasapiOptions(const QString& backendName)
 {
 #ifdef LMMS_BUILD_WIN32
 	const auto wasapi = backendName.contains(QStringLiteral("WASAPI"), Qt::CaseInsensitive);
 	m_wasapiModeLabel->setVisible(wasapi);
 	m_wasapiModeComboBox->setVisible(wasapi);
-	m_wasapiFramesLabel->setVisible(wasapi);
-	m_wasapiFramesComboBox->setVisible(wasapi);
-	m_wasapiLatencyLabel->setVisible(wasapi);
 #else
 	(void)backendName;
 #endif
@@ -729,7 +848,17 @@ void AudioPortAudioSetupWidget::updateWasapiOptions(const QString& backendName)
 
 void AudioPortAudioSetupWidget::show()
 {
-	static auto s_initGuard = detail::PortAudioInitializationGuard{};
+	try
+	{
+		static auto s_initGuard = detail::PortAudioInitializationGuard{};
+		(void)s_initGuard;
+	}
+	catch (const std::exception& ex)
+	{
+		qWarning("PortAudio: %s", ex.what());
+		m_openStatusLabel->setText(tr("PortAudio failed to initialize."));
+		return;
+	}
 
 	if (m_backendComboBox->count() == 0)
 	{
@@ -749,6 +878,11 @@ void AudioPortAudioSetupWidget::show()
 		m_backendComboBox->setCurrentIndex(selectedBackendIndex);
 	}
 
+	const auto status = AudioPortAudio::openStatus();
+	m_openStatusLabel->setText(status.isEmpty()
+		? tr("No PortAudio stream is open. Audio changes apply after restart.")
+		: status);
+
 	AudioDeviceSetupWidget::show();
 }
 
@@ -759,9 +893,7 @@ void AudioPortAudioSetupWidget::saveSettings()
 	m_outputDevice->saveToConfig();
 #ifdef LMMS_BUILD_WIN32
 	ConfigManager::inst()->setValue(tag(), wasapiModeAttribute(), m_wasapiModeComboBox->currentData().toString());
-	ConfigManager::inst()->setValue(tag(), wasapiFramesAttribute(),
-		QString::number(m_wasapiFramesComboBox->currentData().toInt()));
-#endif
+#endif // LMMS_BUILD_WIN32
 }
 } // namespace lmms::gui
 

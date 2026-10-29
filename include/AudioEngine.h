@@ -25,6 +25,8 @@
 #ifndef LMMS_AUDIO_ENGINE_H
 #define LMMS_AUDIO_ENGINE_H
 
+#include "lmmsconfig.h"
+
 #include <mutex>
 
 #include <QThread>
@@ -53,18 +55,14 @@ constexpr f_cnt_t MINIMUM_BUFFER_SIZE = 32;
 constexpr f_cnt_t DEFAULT_BUFFER_SIZE = 256;
 constexpr f_cnt_t MAXIMUM_BUFFER_SIZE = 4096;
 
-// Host-API buffer and sample rate used when the user has not chosen one.
-// On Windows the target is onboard Realtek: 512 frames at 48 kHz is about
-// 10.7 ms, which fits a typical WASAPI shared-mode period. The engine still
-// renders internally in periods of at most DEFAULT_BUFFER_SIZE. _WIN32 is the
-// compiler macro so this stays correct even in headers that do not include
-// lmmsconfig.h.
-#if defined(_WIN32)
+// Sample rate used when the user has not chosen one. Windows defaults to
+// 48 kHz because WASAPI shared mode follows the device mix format, which is
+// 48 kHz on typical onboard Realtek hardware. The device buffer size stays
+// DEFAULT_BUFFER_SIZE so SDL is unchanged; WASAPI snaps that size separately.
+#ifdef LMMS_BUILD_WIN32
 constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 48000;
-constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = 512;
 #else
 constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 44100;
-constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = DEFAULT_BUFFER_SIZE;
 #endif
 
 constexpr int BYTES_PER_SAMPLE = sizeof(sample_t);
@@ -320,6 +318,9 @@ public:
 
 	//! Enable/disable sanitization of inf/nan values
 	void setSanitizationEnabled(bool enabled) { m_sanitizationEnabled.store(enabled, std::memory_order_relaxed); }
+
+	//! Audio device sample rate changed after the initial device setup.
+	void notifyDeviceSampleRateChanged() { emit sampleRateChanged(); }
 
 signals:
 	void qualitySettingsChanged();

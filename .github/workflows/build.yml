@@ -362,7 +362,7 @@ jobs:
         env:
           CCACHE_MAXSIZE: 500M
   msvc:
-    name: windows-x64-msvc
+    name: msvc-x64
     runs-on: windows-2025-vs2026
     env:
       CCACHE_MAXSIZE: 0

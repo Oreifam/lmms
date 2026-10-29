@@ -140,7 +140,7 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 	m_disableAutoQuit(ConfigManager::inst()->value(
 			"ui", "disableautoquit", "1").toInt()),
 	m_bufferSize(ConfigManager::inst()->value(
-			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toInt()),
+			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_BUFFER_SIZE)).toInt()),
 	m_mixSanitization(ConfigManager::inst()->value(
 			"audioengine", "sanitizemix", "1").toInt()),
 	m_sampleRate(ConfigManager::inst()->value(
@@ -1292,7 +1292,7 @@ void SetupDialog::setBufferSize(int value)
 
 void SetupDialog::resetBufferSize()
 {
-	setBufferSize(DEFAULT_AUDIO_BUFFER_SIZE / BUFFERSIZE_RESOLUTION);
+	setBufferSize(DEFAULT_BUFFER_SIZE / BUFFERSIZE_RESOLUTION);
 }
 
 
