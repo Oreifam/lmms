@@ -798,10 +798,37 @@ AudioDevice * AudioEngine::tryAudioDevices()
 		if ((dev = openPortAudio()))
 		{
 			m_audioDevName = AudioPortAudio::name();
+#ifdef LMMS_BUILD_WIN32
+			if (ConfigManager::inst()->value("audioportaudio", "migrationfallback") == "1")
+			{
+				ConfigManager::inst()->deleteValue("audioportaudio", "migrationfallback");
+				ConfigManager::inst()->setValue("audioportaudio", "migrationnotice", "switched");
+			}
+#endif // LMMS_BUILD_WIN32
 			return dev;
 		}
+#ifdef LMMS_BUILD_WIN32
+		else if (ConfigManager::inst()->value("audioportaudio", "migrationfallback") == "1")
+		{
+			ConfigManager::inst()->deleteValue("audioportaudio", "migrationfallback");
+			ConfigManager::inst()->setValue("audioportaudio", "migrationnotice", "fallback");
+			ConfigManager::inst()->setValue("audioengine", "audiodev", AudioSdl::name());
+			fprintf(stderr, "PortAudio/WASAPI migration failed; restoring SDL\n");
+#ifdef LMMS_HAVE_SDL
+			success_ful = false;
+			dev = new AudioSdl(success_ful, this);
+			if (success_ful)
+			{
+				m_audioDevName = AudioSdl::name();
+				return dev;
+			}
+			delete dev;
+			dev = nullptr;
+#endif // LMMS_HAVE_SDL
+		}
+#endif // LMMS_BUILD_WIN32
 	}
-#endif
+#endif // LMMS_HAVE_PORTAUDIO
 
 
 	// add more device-classes here...

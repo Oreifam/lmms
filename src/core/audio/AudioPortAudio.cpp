@@ -651,16 +651,39 @@ auto AudioPortAudio::startupNotice() -> QString
 
 auto AudioPortAudio::unseenStartupNotice() -> QString
 {
-	if (s_startupNotice.isEmpty()) { return {}; }
-	const auto seen = ConfigManager::inst()->value(tag(), "noticesignature");
-	if (seen == s_noticeSignature) { return {}; }
-	return s_startupNotice;
+	auto notice = s_startupNotice;
+	const auto migration = ConfigManager::inst()->value(tag(), "migrationnotice");
+	if (migration == QLatin1String("switched"))
+	{
+		const auto text = QCoreApplication::translate("AudioPortAudio",
+			"This Windows setup was switched from SDL to PortAudio using WASAPI shared mode for lower latency. "
+			"Your buffer size was kept when it was 256, 512, or 1024 frames. "
+			"You can switch the audio interface back in Settings.");
+		notice = notice.isEmpty() ? text : text + QLatin1Char('\n') + notice;
+	}
+	else if (migration == QLatin1String("fallback"))
+	{
+		const auto text = QCoreApplication::translate("AudioPortAudio",
+			"LMMS tried to switch this Windows setup from SDL to WASAPI, but PortAudio did not open. SDL is still in use.");
+		notice = notice.isEmpty() ? text : text + QLatin1Char('\n') + notice;
+	}
+
+	if (notice.isEmpty()) { return {}; }
+	if (migration.isEmpty())
+	{
+		const auto seen = ConfigManager::inst()->value(tag(), "noticesignature");
+		if (seen == s_noticeSignature) { return {}; }
+	}
+	return notice;
 }
 
 void AudioPortAudio::acknowledgeStartupNotice()
 {
-	if (s_noticeSignature.isEmpty()) { return; }
-	ConfigManager::inst()->setValue(tag(), "noticesignature", s_noticeSignature);
+	ConfigManager::inst()->deleteValue(tag(), "migrationnotice");
+	if (!s_noticeSignature.isEmpty())
+	{
+		ConfigManager::inst()->setValue(tag(), "noticesignature", s_noticeSignature);
+	}
 	ConfigManager::inst()->saveConfigFile();
 }
 

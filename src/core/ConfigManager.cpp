@@ -36,6 +36,7 @@
 #include "MainWindow.h"
 #include "PathUtil.h"
 #include "ProjectVersion.h"
+#include "lmmsconfig.h"
 #include "lmmsversion.h"
 
 namespace lmms
@@ -45,7 +46,7 @@ namespace lmms
 // Vector with all the upgrade methods
 const std::vector<ConfigManager::UpgradeMethod> ConfigManager::UPGRADE_METHODS = {
 	&ConfigManager::upgrade_1_1_90    ,    &ConfigManager::upgrade_1_1_91,
-	&ConfigManager::upgrade_1_2_2
+	&ConfigManager::upgrade_1_2_2, &ConfigManager::upgrade_1_3_0_wasapi
 };
 
 static inline QString ensureTrailingSlash(const QString & s )
@@ -152,6 +153,40 @@ void ConfigManager::upgrade_1_2_2()
 	}
 
 	m_settings.remove("mixer");
+}
+
+void ConfigManager::upgrade_1_3_0_wasapi()
+{
+#ifdef LMMS_BUILD_WIN32
+	// One shot even if a later LMMS version runs upgrades again.
+	if (value("audioportaudio", "wasapimigrated") == "1")
+	{
+		return;
+	}
+	setValue("audioportaudio", "wasapimigrated", "1");
+
+#ifdef LMMS_HAVE_PORTAUDIO
+	const auto device = value("audioengine", "audiodev");
+	const auto isSdl = device == QLatin1String("SDL (Simple DirectMedia Layer)")
+		|| device.startsWith(QLatin1String("SDL"));
+	if (!isSdl)
+	{
+		return;
+	}
+
+	setValue("audioengine", "audiodev", "PortAudio");
+	setValue("audioportaudio", "backend", "Windows WASAPI");
+	setValue("audioportaudio", "wasapimode", "shared");
+	// migrationfallback is cleared when the open succeeds or SDL is restored.
+	setValue("audioportaudio", "migrationfallback", "1");
+
+	const auto frames = value("audioengine", "framesperaudiobuffer").toInt();
+	if (frames != 256 && frames != 512 && frames != 1024)
+	{
+		setValue("audioengine", "framesperaudiobuffer", "512");
+	}
+#endif // LMMS_HAVE_PORTAUDIO
+#endif // LMMS_BUILD_WIN32
 }
 
 void ConfigManager::upgrade()
