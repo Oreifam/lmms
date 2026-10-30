@@ -31,6 +31,7 @@
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QLabel>
 #include <QString>
 #include <QWidget>
 #include <portaudio.h>
@@ -78,6 +79,15 @@ public:
 
 	static auto name() -> QString { return QT_TRANSLATE_NOOP("AudioDeviceSetupWidget", "PortAudio"); }
 
+	//! What the running stream actually opened (rate, mode, latency). Empty if none.
+	static auto openStatus() -> QString;
+	//! Notice for this open. Empty when the stream matches the request.
+	static auto startupNotice() -> QString;
+	//! Notice if it has not already been shown for the current audio settings.
+	static auto unseenStartupNotice() -> QString;
+	//! Remember that the current settings' notice was shown.
+	static void acknowledgeStartupNotice();
+
 private:
 	void startProcessingImpl() override;
 	void stopProcessingImpl() override;
@@ -87,6 +97,21 @@ private:
 
 	detail::PortAudioInitializationGuard m_initGuard;
 	PaStream* m_paStream = nullptr;
+	// WASAPI's own thread calls PaWasapi_ThreadPriorityBoost. Skip our registration there.
+	bool m_skipCallbackMmcss = false;
+	static QString s_openStatus;
+	static QString s_startupNotice;
+	static QString s_noticeSignature;
+#ifdef LMMS_BUILD_WIN32
+	// Enough to reopen shared mode if exclusive Pa_StartStream fails.
+	bool m_wasapiExclusive = false;
+	PaDeviceIndex m_wasapiInputDevice = paNoDevice;
+	int m_wasapiInputChannels = 0;
+	PaDeviceIndex m_wasapiOutputDevice = paNoDevice;
+	int m_wasapiOutputChannels = 0;
+	double m_wasapiRequestedRate = 0;
+	unsigned long m_wasapiFrames = 0;
+#endif
 };
 } // namespace lmms
 
@@ -100,10 +125,17 @@ public:
 	void saveSettings() override;
 
 private:
+	void updateWasapiOptions(const QString& backendName);
+
 	class DeviceSelectorWidget;
 	QComboBox* m_backendComboBox = nullptr;
 	DeviceSelectorWidget* m_inputDevice = nullptr;
 	DeviceSelectorWidget* m_outputDevice = nullptr;
+	QLabel* m_openStatusLabel = nullptr;
+#ifdef LMMS_BUILD_WIN32
+	QLabel* m_wasapiModeLabel = nullptr;
+	QComboBox* m_wasapiModeComboBox = nullptr;
+#endif
 };
 } // namespace lmms::gui
 

@@ -36,6 +36,7 @@
 #include <QSplitter>
 
 #include "AboutDialog.h"
+#include "AudioPortAudio.h"
 #include "AutomationEditor.h"
 #include "ControllerRackView.h"
 #include "DeprecationHelper.h"
@@ -488,6 +489,13 @@ void MainWindow::finalize()
 		SetupDialog sd( SetupDialog::ConfigTab::AudioSettings );
 		sd.exec();
 	}
+#ifdef LMMS_HAVE_PORTAUDIO
+	else if (const auto notice = AudioPortAudio::unseenStartupNotice(); !notice.isEmpty())
+	{
+		QMessageBox::information(this, tr("Audio device"), notice);
+		AudioPortAudio::acknowledgeStartupNotice();
+	}
+#endif // LMMS_HAVE_PORTAUDIO
 
 	// Add editor subwindows
 	addWindowedWidget(getGUI()->automationEditor());

@@ -24,6 +24,8 @@
 
 #include "AudioEngine.h"
 
+#include <exception>
+
 #include "MixHelpers.h"
 
 #include "lmmsconfig.h"
@@ -68,11 +70,12 @@ AudioEngine::AudioEngine(bool renderOnly)
 	: m_renderOnly(renderOnly)
 	, m_framesPerAudioBuffer(std::clamp(
 		static_cast<f_cnt_t>(ConfigManager::inst()->value("audioengine", "framesperaudiobuffer",
-		QString::number(DEFAULT_BUFFER_SIZE)).toUInt()),
+		QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toUInt()),
 		MINIMUM_BUFFER_SIZE, MAXIMUM_BUFFER_SIZE))
 	, m_framesPerPeriod(std::min(m_framesPerAudioBuffer, DEFAULT_BUFFER_SIZE))
-	, m_baseSampleRate(
-		std::max(ConfigManager::inst()->value("audioengine", "samplerate").toInt(), SUPPORTED_SAMPLERATES.front()))
+	, m_baseSampleRate(static_cast<sample_rate_t>(std::max(
+		ConfigManager::inst()->value("audioengine", "samplerate", QString::number(DEFAULT_SAMPLE_RATE)).toInt(),
+		SUPPORTED_SAMPLERATES.front())))
 	, m_inputBufferRead(0)
 	, m_inputBufferWrite(1)
 	, m_outputBufferRead(nullptr)
@@ -689,6 +692,37 @@ AudioDevice * AudioEngine::tryAudioDevices()
 
 	m_audioDevStartFailed = false;
 
+	// Onboard Realtek has no ASIO driver. Prefer PortAudio so an unset device
+	// starts on WASAPI instead of SDL. An explicit choice is still honored below.
+#ifdef LMMS_HAVE_PORTAUDIO
+	bool triedPortAudio = false;
+	const auto openPortAudio = [this, &success_ful]() -> AudioDevice* {
+		try
+		{
+			auto* created = new AudioPortAudio(success_ful, this);
+			if (success_ful) { return created; }
+			delete created;
+		}
+		catch (const std::exception& ex)
+		{
+			success_ful = false;
+			fprintf(stderr, "PortAudio: %s\n", ex.what());
+		}
+		return nullptr;
+	};
+#ifdef LMMS_BUILD_WIN32
+	if (dev_name.isEmpty())
+	{
+		triedPortAudio = true;
+		if ((dev = openPortAudio()))
+		{
+			m_audioDevName = AudioPortAudio::name();
+			return dev;
+		}
+	}
+#endif // LMMS_BUILD_WIN32
+#endif // LMMS_HAVE_PORTAUDIO
+
 #ifdef LMMS_HAVE_SDL
 	if( dev_name == AudioSdl::name() || dev_name == "" )
 	{
@@ -759,17 +793,42 @@ AudioDevice * AudioEngine::tryAudioDevices()
 
 
 #ifdef LMMS_HAVE_PORTAUDIO
-	if (dev_name == AudioPortAudio::name() || dev_name.isEmpty())
+	if (!triedPortAudio && (dev_name == AudioPortAudio::name() || dev_name.isEmpty()))
 	{
-		dev = new AudioPortAudio( success_ful, this );
-		if( success_ful )
+		if ((dev = openPortAudio()))
 		{
 			m_audioDevName = AudioPortAudio::name();
+#ifdef LMMS_BUILD_WIN32
+			if (ConfigManager::inst()->value("audioportaudio", "migrationfallback") == "1")
+			{
+				ConfigManager::inst()->deleteValue("audioportaudio", "migrationfallback");
+				ConfigManager::inst()->setValue("audioportaudio", "migrationnotice", "switched");
+			}
+#endif // LMMS_BUILD_WIN32
 			return dev;
 		}
-		delete dev;
+#ifdef LMMS_BUILD_WIN32
+		else if (ConfigManager::inst()->value("audioportaudio", "migrationfallback") == "1")
+		{
+			ConfigManager::inst()->deleteValue("audioportaudio", "migrationfallback");
+			ConfigManager::inst()->setValue("audioportaudio", "migrationnotice", "fallback");
+			ConfigManager::inst()->setValue("audioengine", "audiodev", AudioSdl::name());
+			fprintf(stderr, "PortAudio/WASAPI migration failed; restoring SDL\n");
+#ifdef LMMS_HAVE_SDL
+			success_ful = false;
+			dev = new AudioSdl(success_ful, this);
+			if (success_ful)
+			{
+				m_audioDevName = AudioSdl::name();
+				return dev;
+			}
+			delete dev;
+			dev = nullptr;
+#endif // LMMS_HAVE_SDL
+		}
+#endif // LMMS_BUILD_WIN32
 	}
-#endif
+#endif // LMMS_HAVE_PORTAUDIO
 
 
 	// add more device-classes here...
