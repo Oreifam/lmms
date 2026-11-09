@@ -17,6 +17,18 @@ ENDMACRO()
 IF(LMMS_BUILD_WIN32 AND NOT LMMS_BUILD_WIN64)
 	ADD_SUBDIRECTORY(RemoteVstPlugin)
 ELSEIF(LMMS_BUILD_WIN64 AND MSVC)
+	# The parent build is single-config (Ninja + CMAKE_BUILD_TYPE), but this
+	# external project uses the Visual Studio generator. Without --config,
+	# that generator builds and installs Debug, and the bridge then depends
+	# on the debug CRT (MSVCP140D.dll / VCRUNTIME140D.dll).
+	if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "None")
+		set(_remote_vst32_cfg "${CMAKE_BUILD_TYPE}")
+	elseif(CMAKE_CONFIGURATION_TYPES)
+		set(_remote_vst32_cfg "$<CONFIG>")
+	else()
+		set(_remote_vst32_cfg "RelWithDebInfo")
+	endif()
+
 	ExternalProject_Add(RemoteVstPlugin32
 		"${EXTERNALPROJECT_ARGS}"
 		CMAKE_GENERATOR "${LMMS_MSVC_GENERATOR}"
@@ -25,9 +37,15 @@ ELSEIF(LMMS_BUILD_WIN64 AND MSVC)
 		CMAKE_ARGS
 			"${EXTERNALPROJECT_CMAKE_ARGS}"
 			"-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+		BUILD_COMMAND "${CMAKE_COMMAND}" --build "<BINARY_DIR>" --config "${_remote_vst32_cfg}"
 	)
 
-	INSTALL_EXTERNAL_PROJECT(RemoteVstPlugin32)
+	ExternalProject_Get_Property(RemoteVstPlugin32 BINARY_DIR)
+	install(CODE "
+		set(CMAKE_INSTALL_CONFIG_NAME \"${_remote_vst32_cfg}\")
+		set(BUILD_TYPE \"${_remote_vst32_cfg}\")
+		include(\"${BINARY_DIR}/cmake_install.cmake\")
+	")
 ELSEIF(LMMS_BUILD_LINUX)
 	ExternalProject_Add(RemoteVstPlugin32
 		"${EXTERNALPROJECT_ARGS}"
