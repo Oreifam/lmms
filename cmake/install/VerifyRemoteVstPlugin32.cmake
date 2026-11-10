@@ -48,7 +48,10 @@ set(_system_prefixes
 	"ws2_32"
 )
 
-string(REGEX MATCHALL "[A-Za-z0-9_+]+\\.dll" _dlls "${_deps}")
+# Dumpbin prints one dependency per line, including api-ms-win-crt-*-l1-1-0.dll.
+# Hyphens and dots are part of the file name. A pattern that stops at '-' turns
+# the trailing "-0.dll" of those names into a bogus "0.dll" dependency.
+string(REGEX MATCHALL "[A-Za-z0-9_][A-Za-z0-9_.+-]*\\.[Dd][Ll][Ll]" _dlls "${_deps}")
 if(NOT _dlls)
 	message(FATAL_ERROR "dumpbin reported no DLL dependencies for ${_exe}:\n${_deps}")
 endif()
