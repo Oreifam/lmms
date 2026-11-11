@@ -37,6 +37,7 @@
 
 #include "AudioBufferView.h"
 #include "AudioDevice.h"
+#include "HearingGuard.h"
 #include "LmmsTypes.h"
 #include "SampleFrame.h"
 #include "LocklessList.h"
@@ -320,6 +321,16 @@ public:
 	//! Enable/disable sanitization of inf/nan values
 	void setSanitizationEnabled(bool enabled) { m_sanitizationEnabled.store(enabled, std::memory_order_relaxed); }
 
+	//! Limiter and burst mute on real-time device output. Export does not use this.
+	void setEarProtectionEnabled(bool enabled) { m_hearingGuard.setEnabled(enabled); }
+	bool earProtectionEnabled() const { return m_hearingGuard.enabled(); }
+
+	//! True once, after a burst mute starts. The GUI shows a status message and the flag clears.
+	bool takeHearingBurstNotice() { return m_hearingGuard.takeBurstNotice(); }
+
+	//! False while this engine is only rendering a file, or before its output buffers exist.
+	bool realtimeReady() const { return !m_renderOnly && static_cast<bool>(m_outputBufferRead); }
+
 	//! Audio device sample rate changed after the initial device setup.
 	void notifyDeviceSampleRateChanged() { emit sampleRateChanged(); }
 
@@ -361,7 +372,17 @@ private:
 
 			++m_outputBufferReadIndex;
 		}
+
+		// Real-time device buffers only. Offline export calls renderNextPeriod() and skips this.
+		if (!m_renderOnly && dst.frames() > 0 && dst.channels() > 0)
+		{
+			const auto reason = m_hearingGuard.process(dst.channels(), dst.frames(), static_cast<int>(outputSampleRate()),
+				[&](int channel, f_cnt_t frame) -> float& { return dst.sample(channel, frame); });
+			if (reason != HearingGuard::Reason::None) { reportHearingBurst(m_hearingGuard.lastPeak(), reason); }
+		}
 	}
+
+	void reportHearingBurst(float peak, HearingGuard::Reason reason);
 
 	AudioEngine( bool renderOnly );
 	~AudioEngine() override;
@@ -428,6 +449,7 @@ private:
 
 	bool m_clearSignal;
 	std::atomic<bool> m_sanitizationEnabled = false;
+	HearingGuard m_hearingGuard;
 
 	std::recursive_mutex m_changeMutex;
 

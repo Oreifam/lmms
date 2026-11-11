@@ -757,7 +757,7 @@ void AudioPortAudio::stopProcessingImpl()
 }
 
 int AudioPortAudio::processCallback(const void*, void* output, unsigned long frameCount,
-	const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void* userData)
+	const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags statusFlags, void* userData)
 {
 	const auto device = static_cast<AudioPortAudio*>(userData);
 	// WASAPI already boosted this thread inside PortAudio. MME and DirectSound have not.
@@ -765,21 +765,26 @@ int AudioPortAudio::processCallback(const void*, void* output, unsigned long fra
 	{
 		[[maybe_unused]] thread_local const MmThreadRegistration mmcssRegistration{true};
 	}
-	if (!device || !output)
+	if (output == nullptr || frameCount == 0 || device == nullptr || device->channels() <= 0)
 	{
 		return paContinue;
 	}
 
 	const auto channels = device->channels();
 	const auto outputBuffer = static_cast<float*>(output);
+	// Every path below leaves a defined buffer. A late or not-yet-ready callback must not play leftovers.
+	std::fill_n(outputBuffer, frameCount * static_cast<unsigned long>(channels), 0.f);
 
-	if (!device->isRunning())
+	const auto engine = device->audioEngine();
+	if (!device->isRunning() || engine == nullptr || !engine->realtimeReady())
 	{
-		std::fill_n(outputBuffer, frameCount * channels, 0.f);
-		return paComplete;
+		return device->isRunning() ? paContinue : paComplete;
 	}
 
-	device->audioEngine()->renderNextBuffer({outputBuffer, channels, frameCount});
+	constexpr PaStreamCallbackFlags outputError = paOutputUnderflow | paOutputOverflow;
+	if ((statusFlags & outputError) != 0) { return paContinue; }
+
+	engine->renderNextBuffer({outputBuffer, channels, frameCount});
 	return paContinue;
 }
 } // namespace lmms

@@ -143,6 +143,8 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toInt()),
 	m_mixSanitization(ConfigManager::inst()->value(
 			"audioengine", "sanitizemix", "1").toInt()),
+	m_earProtection(ConfigManager::inst()->value(
+			"audioengine", "hearingprotection", "1").toInt()),
 	m_sampleRate(ConfigManager::inst()->value(
 			"audioengine", "samplerate", QString::number(DEFAULT_SAMPLE_RATE)).toInt()),
 	m_midiAutoQuantize(ConfigManager::inst()->value(
@@ -650,6 +652,12 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 	enableMixSanitizationCheckbox->setToolTip(tr("Provides protection from any plugins or tracks that generate "
 												 "corrupted audio, but may negatively impact performance."));
 
+	const auto earProtectionCheckbox = addCheckBox(tr("Protect my ears (limiter and burst guard)"), otherBox,
+		otherBoxLayout, m_earProtection, SLOT(toggleEarProtection(bool)), false);
+	earProtectionCheckbox->setToolTip(tr("Limits real-time output to about -1 dBFS and mutes a sudden burst. "
+		"Unchecking still replaces NaN and infinity with silence and hard-clips at full scale. "
+		"Offline export is unchanged."));
+
 	// Audio layout ordering.
 	audio_layout->addWidget(audioInterfaceBox);
 	audio_layout->addWidget(as_w);
@@ -1018,6 +1026,8 @@ void SetupDialog::accept()
 					m_audioIfaceNames[m_audioInterfaces->currentText()]);
 	ConfigManager::inst()->setValue("audioengine", "sanitizemix",
 					QString::number(m_mixSanitization));
+	ConfigManager::inst()->setValue("audioengine", "hearingprotection",
+					QString::number(m_earProtection));
 	ConfigManager::inst()->setValue("audioengine", "samplerate",
 					QString::number(m_sampleRate));
 	ConfigManager::inst()->setValue("audioengine", "framesperaudiobuffer",
@@ -1231,6 +1241,12 @@ void SetupDialog::toggleMixSanitization(bool enabled)
 {
 	m_mixSanitization = enabled;
 	Engine::audioEngine()->setSanitizationEnabled(m_mixSanitization);
+}
+
+void SetupDialog::toggleEarProtection(bool enabled)
+{
+	m_earProtection = enabled;
+	Engine::audioEngine()->setEarProtectionEnabled(m_earProtection);
 }
 
 void SetupDialog::audioInterfaceChanged(const QString & iface)

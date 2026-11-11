@@ -26,6 +26,9 @@
 
 #include <exception>
 
+#include <QDateTime>
+#include <QDebug>
+
 #include "MixHelpers.h"
 
 #include "lmmsconfig.h"
@@ -38,6 +41,7 @@
 #include "EnvelopeAndLfoParameters.h"
 #include "NotePlayHandle.h"
 #include "ConfigManager.h"
+#include "Engine.h"
 
 // platform-specific audio-interface-classes
 #include "AudioAlsa.h"
@@ -100,6 +104,9 @@ AudioEngine::AudioEngine(bool renderOnly)
 		zeroSampleFrames(m_inputBuffer[i], m_inputBufferSize[i]);
 	}
 
+	m_hearingGuard.setEnabled(
+		ConfigManager::inst()->value("audioengine", "hearingprotection", "1").toInt() != 0);
+
 	BufferManager::init( m_framesPerPeriod );
 	m_outputBufferRead = std::make_unique<SampleFrame[]>(m_framesPerPeriod);
 	m_outputBufferWrite = std::make_unique<SampleFrame[]>(m_framesPerPeriod);
@@ -145,6 +152,19 @@ AudioEngine::~AudioEngine()
 
 
 
+
+void AudioEngine::reportHearingBurst(float peak, HearingGuard::Reason reason)
+{
+	const char* why = "level jump";
+	if (reason == HearingGuard::Reason::FullScaleFraction) { why = "samples beyond full scale"; }
+	else if (reason == HearingGuard::Reason::DcOffset) { why = "dc offset"; }
+
+	const auto* song = Engine::getSong();
+	const auto ticks = song != nullptr ? static_cast<long long>(song->getPlayPos().getTicks()) : -1LL;
+	const auto when = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+	qWarning("Hearing guard muted output at %s, song position %lld ticks, peak %.3f, reason %s",
+		qUtf8Printable(when), ticks, static_cast<double>(peak), why);
+}
 
 void AudioEngine::initDevices()
 {

@@ -38,6 +38,9 @@
 #include "MidiEvent.h"
 #include "Song.h"
 
+#include <chrono>
+#include <thread>
+
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -394,17 +397,30 @@ bool RemotePlugin::process( const SampleFrame* _in_buf, SampleFrame* _out_buf )
 		}
 	}
 
-	lock();
-	sendMessage( IdStartProcessing );
-
-	if( m_failed || _out_buf == nullptr || m_outputCount == 0 )
+	// A previous period is still inside the remote. Do not read the shared buffer:
+	// it may be half-written, or it may still hold the previous period.
+	if (m_processingOutstanding)
 	{
+		lock();
+		const bool finished = reapProcessing(false);
 		unlock();
+		if (_out_buf != nullptr) { zeroSampleFrames(_out_buf, frames); }
+		noteDroppedAudio(finished ? "discarded late buffer" : "late");
 		return false;
 	}
 
-	waitForMessage( IdProcessingDone );
+	lock();
+	sendMessage( IdStartProcessing );
+	m_processingOutstanding = true;
+	const bool finished = reapProcessing(true);
 	unlock();
+
+	if (!finished || m_failed || _out_buf == nullptr || m_outputCount == 0)
+	{
+		if (_out_buf != nullptr) { zeroSampleFrames(_out_buf, frames); }
+		if (!finished || m_failed) { noteDroppedAudio(m_failed ? "failed" : "late"); }
+		return false;
+	}
 
 	const ch_cnt_t outputs = std::min<ch_cnt_t>(m_outputCount,
 							DEFAULT_CHANNELS);
@@ -441,6 +457,61 @@ bool RemotePlugin::process( const SampleFrame* _in_buf, SampleFrame* _out_buf )
 	}
 
 	return true;
+}
+
+
+
+
+bool RemotePlugin::reapProcessing(bool wait)
+{
+	const auto rate = Engine::audioEngine()->outputSampleRate();
+	const auto deviceFrames = Engine::audioEngine()->framesPerAudioBuffer();
+	const int safeRate = rate > 0 ? rate : 1;
+	const int safeFrames = deviceFrames > 0 ? deviceFrames : 1;
+	// One device buffer is the callback's deadline. A stuck plugin must not hold the audio thread past it.
+	const auto budgetUs = wait ? std::chrono::microseconds(static_cast<int>(1000000LL * safeFrames / safeRate))
+		: std::chrono::microseconds(0);
+	const auto budget = budgetUs < std::chrono::microseconds(2000) && wait ? std::chrono::microseconds(2000) : budgetUs;
+	const auto deadline = std::chrono::steady_clock::now() + budget;
+
+	while (!isInvalid())
+	{
+		if (!messagesLeft())
+		{
+			if (!wait || std::chrono::steady_clock::now() >= deadline) { return false; }
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
+			continue;
+		}
+
+		const message arrived = receiveMessage();
+		processMessage(arrived);
+		if (arrived.id == IdProcessingDone)
+		{
+			m_processingOutstanding = false;
+			return !m_failed;
+		}
+		if (arrived.id == IdUndefined)
+		{
+			m_processingOutstanding = false;
+			return false;
+		}
+	}
+
+	m_processingOutstanding = false;
+	return false;
+}
+
+
+
+
+void RemotePlugin::noteDroppedAudio(const char* reason)
+{
+	++m_droppedPeriods;
+	static auto lastLog = std::chrono::steady_clock::time_point{};
+	const auto now = std::chrono::steady_clock::now();
+	if (now - lastLog < std::chrono::seconds(1)) { return; }
+	lastLog = now;
+	qWarning("Remote plugin output replaced with silence (%s), %d period(s)", reason, m_droppedPeriods);
 }
 
 

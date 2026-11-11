@@ -100,6 +100,7 @@ private slots:
 	void toggleVSTAlwaysOnTop(bool en);
 	void toggleDisableAutoQuit(bool enabled);
 	void toggleMixSanitization(bool enabled);
+	void toggleEarProtection(bool enabled);
 
 	// Audio settings widget.
 	void audioInterfaceChanged(const QString & driver);
@@ -190,6 +191,7 @@ private:
 	QLabel * m_bufferSizeLbl;
 	QLabel * m_bufferSizeWarnLbl;
 	bool m_mixSanitization;
+	bool m_earProtection;
 	int m_sampleRate;
 	QSlider* m_sampleRateSlider;
 

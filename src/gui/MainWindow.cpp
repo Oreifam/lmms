@@ -34,8 +34,10 @@
 #include <QMessageBox>
 #include <QShortcut>
 #include <QSplitter>
+#include <QStatusBar>
 
 #include "AboutDialog.h"
+#include "AudioEngine.h"
 #include "AudioPortAudio.h"
 #include "AutomationEditor.h"
 #include "ControllerRackView.h"
@@ -1374,6 +1376,10 @@ void MainWindow::keyReleaseEvent( QKeyEvent * _ke )
 void MainWindow::timerEvent( QTimerEvent * _te)
 {
 	emit periodicUpdate();
+	if (auto* engine = Engine::audioEngine(); engine != nullptr && engine->takeHearingBurstNotice())
+	{
+		statusBar()->showMessage(tr("Loud burst blocked to protect your hearing"), 5000);
+	}
 }
 
 
