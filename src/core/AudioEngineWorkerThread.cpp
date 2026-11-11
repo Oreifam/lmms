@@ -30,6 +30,7 @@
 
 #include "AudioEngine.h"
 #include "Hardware.h"
+#include "MmThread.h"
 #include "ThreadableJob.h"
 
 
@@ -158,6 +159,8 @@ void AudioEngineWorkerThread::startAndWaitForJobs()
 
 void AudioEngineWorkerThread::run()
 {
+	// Default MMCSS priority. The callback thread, not these workers, is the deadline.
+	[[maybe_unused]] const MmThreadRegistration mmcssRegistration;
 	disableDenormals();
 
 	QMutex m;

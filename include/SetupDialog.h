@@ -100,6 +100,7 @@ private slots:
 	void toggleVSTAlwaysOnTop(bool en);
 	void toggleDisableAutoQuit(bool enabled);
 	void toggleMixSanitization(bool enabled);
+	void toggleEarProtection(bool enabled);
 
 	// Audio settings widget.
 	void audioInterfaceChanged(const QString & driver);
@@ -114,6 +115,8 @@ private slots:
 	// Paths settings widget.
 	void openWorkingDir();
 	void setWorkingDir(const QString & workingDir);
+	void openUserSamplesDir();
+	void setUserSamplesDir(const QString & samplesDir);
 	void openVSTDir();
 	void setVSTDir(const QString & vstDir);
 	void openLADSPADir();
@@ -188,6 +191,7 @@ private:
 	QLabel * m_bufferSizeLbl;
 	QLabel * m_bufferSizeWarnLbl;
 	bool m_mixSanitization;
+	bool m_earProtection;
 	int m_sampleRate;
 	QSlider* m_sampleRateSlider;
 
@@ -200,6 +204,7 @@ private:
 
 	// Paths settings widgets.
 	QString m_workingDir;
+	QString m_userSamplesDir;
 	QString m_vstDir;
 	QString m_ladspaDir;
 	QString m_gigDir;
@@ -211,6 +216,7 @@ private:
 	QString m_backgroundPicFile;
 
 	QLineEdit * m_workingDirLineEdit;
+	QLineEdit * m_userSamplesDirLineEdit;
 	QLineEdit * m_vstDirLineEdit;
 	QLineEdit * m_themeDirLineEdit;
 	QLineEdit * m_ladspaDirLineEdit;

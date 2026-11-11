@@ -25,6 +25,8 @@
 #ifndef LMMS_AUDIO_ENGINE_H
 #define LMMS_AUDIO_ENGINE_H
 
+#include "lmmsconfig.h"
+
 #include <mutex>
 
 #include <QThread>
@@ -35,6 +37,7 @@
 
 #include "AudioBufferView.h"
 #include "AudioDevice.h"
+#include "HearingGuard.h"
 #include "LmmsTypes.h"
 #include "SampleFrame.h"
 #include "LocklessList.h"
@@ -52,6 +55,17 @@ class AudioEngineWorkerThread;
 constexpr f_cnt_t MINIMUM_BUFFER_SIZE = 32;
 constexpr f_cnt_t DEFAULT_BUFFER_SIZE = 256;
 constexpr f_cnt_t MAXIMUM_BUFFER_SIZE = 4096;
+
+// Unset audio defaults. Windows uses 48 kHz and 512 frames so the settings
+// slider and WASAPI open the same buffer. A WASAPI-only 512 would be overwritten
+// the first time any setting is saved, because the dialog writes this value.
+#ifdef LMMS_BUILD_WIN32
+constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 48000;
+constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = 512;
+#else
+constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 44100;
+constexpr f_cnt_t DEFAULT_AUDIO_BUFFER_SIZE = DEFAULT_BUFFER_SIZE;
+#endif
 
 constexpr int BYTES_PER_SAMPLE = sizeof(sample_t);
 constexpr int BYTES_PER_INT_SAMPLE = sizeof(int_sample_t);
@@ -307,6 +321,19 @@ public:
 	//! Enable/disable sanitization of inf/nan values
 	void setSanitizationEnabled(bool enabled) { m_sanitizationEnabled.store(enabled, std::memory_order_relaxed); }
 
+	//! Limiter and burst mute on real-time device output. Export does not use this.
+	void setEarProtectionEnabled(bool enabled) { m_hearingGuard.setEnabled(enabled); }
+	bool earProtectionEnabled() const { return m_hearingGuard.enabled(); }
+
+	//! True once, after a burst mute starts. The GUI shows a status message and the flag clears.
+	bool takeHearingBurstNotice() { return m_hearingGuard.takeBurstNotice(); }
+
+	//! False while this engine is only rendering a file, or before its output buffers exist.
+	bool realtimeReady() const { return !m_renderOnly && static_cast<bool>(m_outputBufferRead); }
+
+	//! Audio device sample rate changed after the initial device setup.
+	void notifyDeviceSampleRateChanged() { emit sampleRateChanged(); }
+
 signals:
 	void qualitySettingsChanged();
 	void sampleRateChanged();
@@ -345,7 +372,17 @@ private:
 
 			++m_outputBufferReadIndex;
 		}
+
+		// Real-time device buffers only. Offline export calls renderNextPeriod() and skips this.
+		if (!m_renderOnly && dst.frames() > 0 && dst.channels() > 0)
+		{
+			const auto reason = m_hearingGuard.process(dst.channels(), dst.frames(), static_cast<int>(outputSampleRate()),
+				[&](int channel, f_cnt_t frame) -> float& { return dst.sample(channel, frame); });
+			if (reason != HearingGuard::Reason::None) { reportHearingBurst(m_hearingGuard.lastPeak(), reason); }
+		}
 	}
+
+	void reportHearingBurst(float peak, HearingGuard::Reason reason);
 
 	AudioEngine( bool renderOnly );
 	~AudioEngine() override;
@@ -412,6 +449,7 @@ private:
 
 	bool m_clearSignal;
 	std::atomic<bool> m_sanitizationEnabled = false;
+	HearingGuard m_hearingGuard;
 
 	std::recursive_mutex m_changeMutex;
 

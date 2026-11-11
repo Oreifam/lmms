@@ -156,6 +156,9 @@ protected:
 	bool m_failed;
 private:
 	void resizeSharedProcessingMemory();
+	//! Collect IdProcessingDone. When @a wait is false, return immediately if it has not arrived.
+	bool reapProcessing(bool wait);
+	void noteDroppedAudio(const char* reason);
 
 
 	QProcess m_process;
@@ -172,6 +175,8 @@ private:
 
 	int m_inputCount;
 	int m_outputCount;
+	bool m_processingOutstanding = false;
+	int m_droppedPeriods = 0;
 
 #ifndef SYNC_WITH_SHM_FIFO
 	int m_server;

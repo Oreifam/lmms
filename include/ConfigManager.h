@@ -123,7 +123,7 @@ public:
 
 	QString userSamplesDir() const
 	{
-		return workingDir() + SAMPLES_PATH;
+		return m_userSamplesDir.isEmpty() ? workingDir() + SAMPLES_PATH : m_userSamplesDir;
 	}
 
 
@@ -255,6 +255,7 @@ public:
 
 
 	void setWorkingDir(const QString & workingDir);
+	void setUserSamplesDir(const QString & samplesDir);
 	void setVSTDir(const QString & vstDir);
 	void setLADSPADir(const QString & ladspaDir);
 	void setSF2Dir(const QString & sf2Dir);
@@ -281,6 +282,7 @@ private:
 	void upgrade_1_1_90();
 	void upgrade_1_1_91();
 	void upgrade_1_2_2();
+	void upgrade_1_3_0_wasapi();
 	void upgrade();
 
 	// List of all upgrade methods
@@ -288,6 +290,7 @@ private:
 
 	QString m_workingDir;
 	QString m_dataDir;
+	QString m_userSamplesDir;
 	QString m_vstDir;
 	QString m_ladspaDir;
 	QString m_sf2Dir;

@@ -140,14 +140,17 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 	m_disableAutoQuit(ConfigManager::inst()->value(
 			"ui", "disableautoquit", "1").toInt()),
 	m_bufferSize(ConfigManager::inst()->value(
-			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_BUFFER_SIZE)).toInt()),
+			"audioengine", "framesperaudiobuffer", QString::number(DEFAULT_AUDIO_BUFFER_SIZE)).toInt()),
 	m_mixSanitization(ConfigManager::inst()->value(
 			"audioengine", "sanitizemix", "1").toInt()),
+	m_earProtection(ConfigManager::inst()->value(
+			"audioengine", "hearingprotection", "1").toInt()),
 	m_sampleRate(ConfigManager::inst()->value(
-			"audioengine", "samplerate").toInt()),
+			"audioengine", "samplerate", QString::number(DEFAULT_SAMPLE_RATE)).toInt()),
 	m_midiAutoQuantize(ConfigManager::inst()->value(
 			"midi", "autoquantize", "0").toInt() != 0),
 	m_workingDir(QDir::toNativeSeparators(ConfigManager::inst()->workingDir())),
+	m_userSamplesDir(QDir::toNativeSeparators(ConfigManager::inst()->userSamplesDir())),
 	m_vstDir(QDir::toNativeSeparators(ConfigManager::inst()->vstDir())),
 	m_ladspaDir(QDir::toNativeSeparators(ConfigManager::inst()->ladspaDir())),
 	m_gigDir(QDir::toNativeSeparators(ConfigManager::inst()->gigDir())),
@@ -602,7 +605,7 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 		[setSampleRate](int value) { setSampleRate(SUPPORTED_SAMPLERATES[value]); });
 
 	connect(sampleRateResetButton, &QPushButton::clicked, this,
-		[setSampleRate] { setSampleRate(SUPPORTED_SAMPLERATES.front()); });
+		[setSampleRate] { setSampleRate(DEFAULT_SAMPLE_RATE); });
 
 	// Buffer size group
 	QGroupBox * bufferSizeBox = new QGroupBox(tr("Buffer size"), audio_w);
@@ -648,6 +651,12 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 		m_mixSanitization, SLOT(toggleMixSanitization(bool)), false);
 	enableMixSanitizationCheckbox->setToolTip(tr("Provides protection from any plugins or tracks that generate "
 												 "corrupted audio, but may negatively impact performance."));
+
+	const auto earProtectionCheckbox = addCheckBox(tr("Protect my ears (limiter and burst guard)"), otherBox,
+		otherBoxLayout, m_earProtection, SLOT(toggleEarProtection(bool)), false);
+	earProtectionCheckbox->setToolTip(tr("Limits real-time output to about -1 dBFS and mutes a sudden burst. "
+		"Unchecking still replaces NaN and infinity with silence and hard-clips at full scale. "
+		"Offline export is unchanged."));
 
 	// Audio layout ordering.
 	audio_layout->addWidget(audioInterfaceBox);
@@ -826,6 +835,10 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 		SLOT(setWorkingDir(const QString&)),
 		SLOT(openWorkingDir()),
 		m_workingDirLineEdit);
+	addPathEntry(tr("User samples directory"), m_userSamplesDir,
+		SLOT(setUserSamplesDir(const QString&)),
+		SLOT(openUserSamplesDir()),
+		m_userSamplesDirLineEdit);
 	addPathEntry(tr("VST plugins directory"), m_vstDir,
 		SLOT(setVSTDir(const QString&)),
 		SLOT(openVSTDir()),
@@ -1013,6 +1026,8 @@ void SetupDialog::accept()
 					m_audioIfaceNames[m_audioInterfaces->currentText()]);
 	ConfigManager::inst()->setValue("audioengine", "sanitizemix",
 					QString::number(m_mixSanitization));
+	ConfigManager::inst()->setValue("audioengine", "hearingprotection",
+					QString::number(m_earProtection));
 	ConfigManager::inst()->setValue("audioengine", "samplerate",
 					QString::number(m_sampleRate));
 	ConfigManager::inst()->setValue("audioengine", "framesperaudiobuffer",
@@ -1025,6 +1040,7 @@ void SetupDialog::accept()
 
 
 	ConfigManager::inst()->setWorkingDir(QDir::fromNativeSeparators(m_workingDir));
+	ConfigManager::inst()->setUserSamplesDir(QDir::fromNativeSeparators(m_userSamplesDir));
 	ConfigManager::inst()->setVSTDir(QDir::fromNativeSeparators(m_vstDir));
 	ConfigManager::inst()->setLADSPADir(QDir::fromNativeSeparators(m_ladspaDir));
 	ConfigManager::inst()->setSF2Dir(QDir::fromNativeSeparators(m_sf2Dir));
@@ -1227,6 +1243,12 @@ void SetupDialog::toggleMixSanitization(bool enabled)
 	Engine::audioEngine()->setSanitizationEnabled(m_mixSanitization);
 }
 
+void SetupDialog::toggleEarProtection(bool enabled)
+{
+	m_earProtection = enabled;
+	Engine::audioEngine()->setEarProtectionEnabled(m_earProtection);
+}
+
 void SetupDialog::audioInterfaceChanged(const QString & iface)
 {
 	for(AswMap::iterator it = m_audioIfaceSetupWidgets.begin();
@@ -1292,7 +1314,7 @@ void SetupDialog::setBufferSize(int value)
 
 void SetupDialog::resetBufferSize()
 {
-	setBufferSize(DEFAULT_BUFFER_SIZE / BUFFERSIZE_RESOLUTION);
+	setBufferSize(DEFAULT_AUDIO_BUFFER_SIZE / BUFFERSIZE_RESOLUTION);
 }
 
 
@@ -1331,6 +1353,23 @@ void SetupDialog::openWorkingDir()
 void SetupDialog::setWorkingDir(const QString & workingDir)
 {
 	m_workingDir = workingDir;
+}
+
+
+void SetupDialog::openUserSamplesDir()
+{
+	auto newDir = FileDialog::getExistingDirectory(this,
+		tr("Choose your samples directory"), m_userSamplesDir);
+	if (!newDir.isEmpty())
+	{
+		m_userSamplesDirLineEdit->setText(newDir);
+	}
+}
+
+
+void SetupDialog::setUserSamplesDir(const QString & samplesDir)
+{
+	m_userSamplesDir = samplesDir;
 }
 
 
