@@ -148,6 +148,7 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 	m_midiAutoQuantize(ConfigManager::inst()->value(
 			"midi", "autoquantize", "0").toInt() != 0),
 	m_workingDir(QDir::toNativeSeparators(ConfigManager::inst()->workingDir())),
+	m_userSamplesDir(QDir::toNativeSeparators(ConfigManager::inst()->userSamplesDir())),
 	m_vstDir(QDir::toNativeSeparators(ConfigManager::inst()->vstDir())),
 	m_ladspaDir(QDir::toNativeSeparators(ConfigManager::inst()->ladspaDir())),
 	m_gigDir(QDir::toNativeSeparators(ConfigManager::inst()->gigDir())),
@@ -826,6 +827,10 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 		SLOT(setWorkingDir(const QString&)),
 		SLOT(openWorkingDir()),
 		m_workingDirLineEdit);
+	addPathEntry(tr("User samples directory"), m_userSamplesDir,
+		SLOT(setUserSamplesDir(const QString&)),
+		SLOT(openUserSamplesDir()),
+		m_userSamplesDirLineEdit);
 	addPathEntry(tr("VST plugins directory"), m_vstDir,
 		SLOT(setVSTDir(const QString&)),
 		SLOT(openVSTDir()),
@@ -1025,6 +1030,7 @@ void SetupDialog::accept()
 
 
 	ConfigManager::inst()->setWorkingDir(QDir::fromNativeSeparators(m_workingDir));
+	ConfigManager::inst()->setUserSamplesDir(QDir::fromNativeSeparators(m_userSamplesDir));
 	ConfigManager::inst()->setVSTDir(QDir::fromNativeSeparators(m_vstDir));
 	ConfigManager::inst()->setLADSPADir(QDir::fromNativeSeparators(m_ladspaDir));
 	ConfigManager::inst()->setSF2Dir(QDir::fromNativeSeparators(m_sf2Dir));
@@ -1331,6 +1337,23 @@ void SetupDialog::openWorkingDir()
 void SetupDialog::setWorkingDir(const QString & workingDir)
 {
 	m_workingDir = workingDir;
+}
+
+
+void SetupDialog::openUserSamplesDir()
+{
+	auto newDir = FileDialog::getExistingDirectory(this,
+		tr("Choose your samples directory"), m_userSamplesDir);
+	if (!newDir.isEmpty())
+	{
+		m_userSamplesDirLineEdit->setText(newDir);
+	}
+}
+
+
+void SetupDialog::setUserSamplesDir(const QString & samplesDir)
+{
+	m_userSamplesDir = samplesDir;
 }
 
 
