@@ -58,9 +58,11 @@ void Vst3EffectControls::loadSettings(const QDomElement& element)
 {
 	const auto path = element.attribute(QStringLiteral("path"));
 	if (path.isEmpty()) { return; }
-	QString error;
 	const auto rate = Engine::audioEngine()->outputSampleRate();
-	m_effect->m_instance.load(path, static_cast<int>(rate), MAXIMUM_BUFFER_SIZE, &error);
+	if (!m_effect->m_instance.loadFromProject(path, element.attribute(QStringLiteral("uid")), static_cast<int>(rate), MAXIMUM_BUFFER_SIZE))
+	{
+		return;
+	}
 	const auto state = element.firstChildElement(QStringLiteral("state")).attribute(QStringLiteral("data"));
 	if (!state.isEmpty())
 	{

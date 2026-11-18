@@ -156,6 +156,96 @@ auto Vst3Instance::defaultSearchPaths() -> QStringList
 	return paths;
 }
 
+static auto rejectStoredPluginPath(const QString& stored) -> QString
+{
+	const auto device = stored.startsWith(QLatin1String("\\\\?\\")) || stored.startsWith(QLatin1String("\\\\.\\"))
+		|| stored.startsWith(QLatin1String("//?/")) || stored.startsWith(QLatin1String("//./"));
+	if (device)
+	{
+		return QStringLiteral("Refusing to load a VST3 project path: device paths are not allowed");
+	}
+	if (stored.startsWith(QLatin1String("\\\\")) || stored.startsWith(QLatin1String("//")))
+	{
+		return QStringLiteral("Refusing to load a VST3 project path: UNC paths are not allowed");
+	}
+	if (!stored.endsWith(QLatin1String(".vst3"), Qt::CaseInsensitive))
+	{
+		return QStringLiteral("Refusing to load a VST3 project path: the plugin must end in .vst3");
+	}
+	const auto normalized = QString(stored).replace(QLatin1Char('\\'), QLatin1Char('/'));
+	for (const auto& part : normalized.split(QLatin1Char('/'), Qt::SkipEmptyParts))
+	{
+		if (part == QLatin1String(".."))
+		{
+			return QStringLiteral("Refusing to load a VST3 project path: '..' is not allowed");
+		}
+	}
+	const auto windowsAbsolute = stored.size() >= 3 && stored.at(0).isLetter() && stored.at(1) == QLatin1Char(':')
+		&& (stored.at(2) == QLatin1Char('/') || stored.at(2) == QLatin1Char('\\'));
+	const auto unixAbsolute = stored.startsWith(QLatin1Char('/'));
+	if (!windowsAbsolute && !unixAbsolute)
+	{
+		return QStringLiteral("Refusing to load a VST3 project path: relative paths are not allowed");
+	}
+	return {};
+}
+
+auto Vst3Instance::acceptedProjectPath(const QString& stored, QString* error) -> QString
+{
+	auto fail = [&](const QString& message) {
+		if (error != nullptr) { *error = message; }
+		qWarning("%s", qUtf8Printable(message));
+		return QString();
+	};
+	if (const auto reason = rejectStoredPluginPath(stored); !reason.isEmpty()) { return fail(reason); }
+
+	const auto pluginCanon = QFileInfo(stored).canonicalFilePath();
+	if (pluginCanon.isEmpty())
+	{
+		return fail(QStringLiteral("Refusing to load %1: it is not inside an allowed VST3 folder").arg(stored));
+	}
+#ifdef LMMS_BUILD_WIN32
+	const auto compare = Qt::CaseInsensitive;
+#else
+	const auto compare = Qt::CaseSensitive;
+#endif
+	for (const auto& root : defaultSearchPaths())
+	{
+		const auto rootCanon = QFileInfo(root).canonicalFilePath();
+		if (rootCanon.isEmpty()) { continue; }
+		if (pluginCanon.compare(rootCanon, compare) == 0
+			|| pluginCanon.startsWith(rootCanon + QLatin1Char('/'), compare)
+			|| pluginCanon.startsWith(rootCanon + QLatin1Char('\\'), compare))
+		{
+			return pluginCanon;
+		}
+	}
+	return fail(QStringLiteral("Refusing to load %1: it is not inside an allowed VST3 folder").arg(stored));
+}
+
+auto Vst3Instance::loadFromProject(const QString& storedPath, const QString& savedUid, int sampleRate, int maxBlock) -> bool
+{
+	QString error;
+	const auto accepted = acceptedProjectPath(storedPath, &error);
+	if (accepted.isEmpty())
+	{
+		std::lock_guard<std::mutex> lock(m_impl->mutex);
+		m_impl->error = error;
+		return false;
+	}
+	if (!load(accepted, sampleRate, maxBlock, &error)) { return false; }
+	if (savedUid.isEmpty() || classUid() != savedUid)
+	{
+		const auto message = QStringLiteral("Refusing to load %1: its class id does not match the project").arg(accepted);
+		qWarning("%s", qUtf8Printable(message));
+		unload();
+		std::lock_guard<std::mutex> lock(m_impl->mutex);
+		m_impl->error = message;
+		return false;
+	}
+	return true;
+}
+
 auto Vst3Instance::scanDirectory(const QString& root) -> QStringList
 {
 	QStringList found;

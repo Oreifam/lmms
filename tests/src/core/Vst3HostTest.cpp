@@ -16,6 +16,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include "ConfigManager.h"
 #include "SampleFrame.h"
 #include "Vst3Instance.h"
 
@@ -100,6 +101,44 @@ private slots:
 		QString missing;
 		QVERIFY(!plugin.load(root.path() + QStringLiteral("/missing.vst3"), 48000, 256, &missing));
 		QVERIFY(missing.contains(QStringLiteral("not found")));
+	}
+
+	void ProjectPathMustStayInsideAllowedFolders()
+	{
+		QString error;
+		auto rejected = [&error](const QString& path, const QString& reason) {
+			error.clear();
+			const auto accepted = lmms::Vst3Instance::acceptedProjectPath(path, &error);
+			return accepted.isEmpty() && error.contains(reason);
+		};
+		QVERIFY(rejected(QStringLiteral("\\\\server\\share\\Plugin.vst3"), QStringLiteral("UNC")));
+		QVERIFY(rejected(QStringLiteral("//server/share/Plugin.vst3"), QStringLiteral("UNC")));
+		QVERIFY(rejected(QStringLiteral("\\\\?\\C:\\Plugin.vst3"), QStringLiteral("device")));
+		QVERIFY(rejected(QStringLiteral("\\\\.\\C:\\Plugin.vst3"), QStringLiteral("device")));
+		QVERIFY(rejected(QStringLiteral("Plugin.vst3"), QStringLiteral("relative")));
+		QVERIFY(rejected(QStringLiteral("/tmp/../etc/Plugin.vst3"), QStringLiteral("..")));
+		QVERIFY(rejected(QStringLiteral("/tmp/Plugin.dll"), QStringLiteral(".vst3")));
+
+		QTemporaryDir root;
+		QVERIFY(root.isValid());
+		const auto allowed = root.path() + QStringLiteral("/Allowed");
+		const auto outside = root.path() + QStringLiteral("/Outside");
+		QDir().mkpath(allowed + QStringLiteral("/Plug.vst3"));
+		QDir().mkpath(outside + QStringLiteral("/Plug.vst3"));
+		auto* config = lmms::ConfigManager::inst();
+		const auto previous = config->value(QStringLiteral("vst3"), QStringLiteral("extradir"));
+		config->setValue(QStringLiteral("vst3"), QStringLiteral("extradir"), allowed);
+
+		error.clear();
+		const auto inside = lmms::Vst3Instance::acceptedProjectPath(allowed + QStringLiteral("/Plug.vst3"), &error);
+		QVERIFY2(!inside.isEmpty(), qPrintable(error));
+		QVERIFY(inside.endsWith(QStringLiteral("Plug.vst3")));
+
+		const auto escaped = lmms::Vst3Instance::acceptedProjectPath(outside + QStringLiteral("/Plug.vst3"), &error);
+		QVERIFY(escaped.isEmpty());
+		QVERIFY(error.contains(QStringLiteral("allowed VST3 folder")));
+
+		config->setValue(QStringLiteral("vst3"), QStringLiteral("extradir"), previous);
 	}
 };
 

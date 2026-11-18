@@ -68,6 +68,13 @@ public:
 	//! Standard VST3 folders for this platform, plus the vst3/extradir config value.
 	static auto defaultSearchPaths() -> QStringList;
 
+	//! Canonical path of a project-saved plugin, or empty when the path must not be loaded.
+	//! String checks run before any filesystem call.
+	static auto acceptedProjectPath(const QString& stored, QString* error) -> QString;
+
+	//! Load a path stored in a project, and only if its class id matches @a savedUid.
+	auto loadFromProject(const QString& storedPath, const QString& savedUid, int sampleRate, int maxBlock) -> bool;
+
 	//! .vst3 bundles and single-file plugins under @a root. Bundle binaries nested inside a bundle are skipped.
 	static auto scanDirectory(const QString& root) -> QStringList;
 

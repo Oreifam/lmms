@@ -105,6 +105,8 @@ add_library(lmms_vst3_sdk STATIC ${LMMS_VST3_SDK_SOURCES})
 set_target_properties(lmms_vst3_sdk PROPERTIES
 	SYSTEM TRUE
 	POSITION_INDEPENDENT_CODE ON
+	CXX_STANDARD 17
+	CXX_STANDARD_REQUIRED ON
 )
 target_include_directories(lmms_vst3_sdk PUBLIC "${LMMS_VST3SDK_ROOT}")
 target_compile_definitions(lmms_vst3_sdk PRIVATE RELEASE=1)
