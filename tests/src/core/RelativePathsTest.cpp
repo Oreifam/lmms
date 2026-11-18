@@ -22,7 +22,10 @@
  *
  */
 
+#include <QDir>
+#include <QFile>
 #include <QObject>
+#include <QTemporaryDir>
 #include <QtTest>
 
 #include "ConfigManager.h"
@@ -63,6 +66,70 @@ private slots:
 		QCOMPARE(PathUtil::cleanName(""), empty);
 		QCOMPARE(PathUtil::toAbsolute(""), empty);
 		QCOMPARE(PathUtil::toShortestRelative(""), empty);
+	}
+
+	void MissingPathFallback()
+	{
+		using namespace lmms;
+
+		QTemporaryDir root;
+		QVERIFY(root.isValid());
+
+		auto* config = ConfigManager::inst();
+		const auto previousSamples = config->userSamplesDir();
+		const auto previousVst = config->vstDir();
+		const auto userSamples = QDir(root.path() + "/library/samples").absolutePath() + "/";
+		const auto userVst = QDir(root.path() + "/library/vst").absolutePath() + "/";
+		config->setUserSamplesDir(userSamples);
+		config->setVSTDir(userVst);
+
+		QDir().mkpath(userSamples + "Pack");
+		QFile sample(userSamples + "Pack/file.wav");
+		QVERIFY(sample.open(QIODevice::WriteOnly));
+		sample.close();
+		QFile decoy(userSamples + "file.wav");
+		QVERIFY(decoy.open(QIODevice::WriteOnly));
+		decoy.close();
+
+		QDir().mkpath(userVst + "Xakt");
+		QFile plugin(userVst + "Xakt.dll");
+		QVERIFY(plugin.open(QIODevice::WriteOnly));
+		plugin.close();
+		QFile module(userVst + "Xakt/module.sem");
+		QVERIFY(module.open(QIODevice::WriteOnly));
+		module.close();
+
+		QDir().mkpath(userVst + "vendor");
+		QFile nested(userVst + "vendor/Deep.dll");
+		QVERIFY(nested.open(QIODevice::WriteOnly));
+		nested.close();
+
+		const auto factoryPack = PathUtil::basePrefix(PathUtil::Base::FactorySample) + "Pack/file.wav";
+		QCOMPARE(QDir::cleanPath(PathUtil::toAbsolute(factoryPack)), QDir::cleanPath(userSamples + "Pack/file.wav"));
+
+		const auto prefixedSamples = PathUtil::basePrefix(PathUtil::Base::UserSample) + "samples/Pack/file.wav";
+		QCOMPARE(QDir::cleanPath(PathUtil::toAbsolute(prefixedSamples)), QDir::cleanPath(userSamples + "Pack/file.wav"));
+
+		const auto oldSample = QDir(root.path() + "/Program Files/LMMS/data/samples/Pack/file.wav").absolutePath();
+		QCOMPARE(QDir::cleanPath(PathUtil::toAbsolute(oldSample)), QDir::cleanPath(userSamples + "Pack/file.wav"));
+
+		const auto oldPlugin = QDir(root.path() + "/Program Files/LMMS/data/presets/Xakt.dll").absolutePath();
+		const auto resolvedPlugin = PathUtil::toAbsolute(oldPlugin);
+		QCOMPARE(QDir::cleanPath(resolvedPlugin), QDir::cleanPath(userVst + "Xakt.dll"));
+		QVERIFY(QFileInfo(QFileInfo(resolvedPlugin).absolutePath() + "/Xakt/module.sem").exists());
+
+		const auto oldNested = QDir(root.path() + "/Program Files/LMMS/data/presets/Deep.dll").absolutePath();
+		QCOMPARE(QDir::cleanPath(PathUtil::toAbsolute(oldNested)), QDir::cleanPath(userVst + "vendor/Deep.dll"));
+
+		const auto stillThere = userSamples + "Pack/file.wav";
+		QCOMPARE(QDir::cleanPath(PathUtil::toAbsolute(stillThere)), QDir::cleanPath(QFileInfo(stillThere).absoluteFilePath()));
+
+		const auto missing = PathUtil::basePrefix(PathUtil::Base::FactorySample) + "no/such.wav";
+		const auto expectedMissing = QDir::cleanPath(PathUtil::baseLocation(PathUtil::Base::FactorySample) + "no/such.wav");
+		QCOMPARE(QDir::cleanPath(PathUtil::toAbsolute(missing)), expectedMissing);
+
+		config->setUserSamplesDir(previousSamples);
+		config->setVSTDir(previousVst);
 	}
 
 	//! Test UTF-8 encoded std::string --> std::filesystem:path conversion

@@ -1,6 +1,6 @@
 ---
 name: build
-'on': [push, pull_request]
+'on': [push, pull_request, workflow_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -437,7 +437,9 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
+          name: lmms-windows-x64-msvc
           archive: false
+          if-no-files-found: error
           path: build\lmms-*.exe
       - name: Trim ccache and print statistics
         run: |

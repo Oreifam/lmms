@@ -25,13 +25,122 @@
 #include "PathUtil.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
+#include <QHash>
 
 #include "ConfigManager.h"
 #include "Engine.h"
 #include "lmmsconfig.h" // IWYU pragma: keep
 #include "IoHelper.h" // IWYU pragma: keep
 #include "Song.h"
+
+namespace
+{
+using lmms::PathUtil::Base;
+
+auto pathHasComponent(const QString& path, const QString& component) -> bool
+{
+	const auto parts = path.split('/', Qt::SkipEmptyParts);
+	for (const auto& part : parts)
+	{
+		if (part.compare(component, Qt::CaseInsensitive) == 0) { return true; }
+	}
+	return false;
+}
+
+auto isPluginFile(const QString& path) -> bool
+{
+	const auto suffix = QFileInfo(path).suffix().toLower();
+	return suffix == QLatin1String("dll") || suffix == QLatin1String("so") || suffix == QLatin1String("vst3");
+}
+
+void addRemainder(QStringList& remainders, const QString& candidate)
+{
+	auto remainder = QDir::cleanPath(candidate);
+	while (remainder.startsWith(QLatin1String("./"))) { remainder = remainder.mid(2); }
+	if (remainder.isEmpty() || remainder == QLatin1String(".") || QFileInfo(remainder).isAbsolute()) { return; }
+	if (!remainders.contains(remainder)) { remainders.append(remainder); }
+}
+
+auto remaindersFor(const QString& original) -> QStringList
+{
+	QStringList remainders;
+	addRemainder(remainders, lmms::PathUtil::stripPrefix(original));
+
+	if (QFileInfo(original).isAbsolute())
+	{
+		const auto lowered = original.toLower();
+		for (const auto& component : {QStringLiteral("samples"), QStringLiteral("presets"), QStringLiteral("vst")})
+		{
+			const auto needle = QStringLiteral("/") + component + QStringLiteral("/");
+			const auto index = lowered.indexOf(needle);
+			if (index >= 0) { addRemainder(remainders, original.mid(index + needle.size())); }
+		}
+	}
+
+	const auto snapshot = remainders;
+	for (const auto& remainder : snapshot)
+	{
+		if (remainder.startsWith(QLatin1String("samples/"), Qt::CaseInsensitive))
+		{
+			addRemainder(remainders, remainder.mid(int(QStringLiteral("samples/").size())));
+		}
+	}
+	// The bare file name is the least specific remainder, so it is tried last.
+	addRemainder(remainders, QFileInfo(original).fileName());
+	return remainders;
+}
+
+auto findVstByFileName(const QString& fileName) -> QString
+{
+	static QString cachedDir;
+	static QHash<QString, QString> cache;
+	const auto dir = lmms::PathUtil::baseLocation(Base::UserVST);
+	if (cachedDir != dir)
+	{
+		cache.clear();
+		cachedDir = dir;
+		QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+		while (it.hasNext())
+		{
+			it.next();
+			const auto key = it.fileName().toLower();
+			if (!cache.contains(key)) { cache.insert(key, QDir::cleanPath(it.filePath())); }
+		}
+	}
+	return cache.value(fileName.toLower());
+}
+
+auto locateMovedFile(const QString& original) -> QString
+{
+	const auto remainders = remaindersFor(original);
+	const auto pluginLike = isPluginFile(original)
+		|| lmms::PathUtil::baseLookup(original) == Base::UserVST
+		|| pathHasComponent(original, QStringLiteral("presets"))
+		|| pathHasComponent(original, QStringLiteral("vst"));
+
+	for (const auto& remainder : remainders)
+	{
+		const auto userSample = lmms::PathUtil::baseLocation(Base::UserSample) + remainder;
+		if (QFileInfo::exists(userSample)) { return QDir::cleanPath(userSample); }
+		const auto factorySample = lmms::PathUtil::baseLocation(Base::FactorySample) + remainder;
+		if (QFileInfo::exists(factorySample)) { return QDir::cleanPath(factorySample); }
+	}
+
+	if (!pluginLike) { return {}; }
+
+	for (const auto& remainder : remainders)
+	{
+		const auto vstPath = lmms::PathUtil::baseLocation(Base::UserVST) + remainder;
+		if (QFileInfo::exists(vstPath)) { return QDir::cleanPath(vstPath); }
+	}
+	const auto fileName = QFileInfo(original).fileName();
+	const auto direct = lmms::PathUtil::baseLocation(Base::UserVST) + fileName;
+	if (QFileInfo::exists(direct)) { return QDir::cleanPath(direct); }
+	return findVstByFileName(fileName);
+}
+} // namespace
 
 namespace lmms::PathUtil
 {
@@ -197,18 +306,30 @@ namespace lmms::PathUtil
 		if (input.isEmpty()) { return input; }
 
 		QString path = serializePath(input);
-		//First, do no harm to absolute paths
 		// Note: Paths starting with a colon (:) are always considered absolute, as they denote a QResource.
 		QFileInfo inputFileInfo = QFileInfo(path);
-		if (inputFileInfo.isAbsolute())
+		QString resolved;
+		if (inputFileInfo.isAbsolute() || path.startsWith(QLatin1Char(':')))
 		{
 			if (error) { *error = false; }
-			return path;
+			resolved = path;
 		}
-		//Next, handle old relative paths with no prefix
-		QString upgraded = oldRelativeUpgrade(path);
-		Base base = baseLookup(upgraded);
-		return baseLocation(base, error) + upgraded.remove(0, basePrefix(base).length());
+		else
+		{
+			// Handle old relative paths with no prefix
+			QString upgraded = oldRelativeUpgrade(path);
+			Base base = baseLookup(upgraded);
+			resolved = baseLocation(base, error) + upgraded.remove(0, basePrefix(base).length());
+		}
+
+		if (QFileInfo::exists(resolved)) { return resolved; }
+
+		if (const auto moved = locateMovedFile(path); !moved.isEmpty())
+		{
+			if (error) { *error = false; }
+			return moved;
+		}
+		return resolved;
 	}
 
 	QString relativeOrAbsolute(const QString& input, const Base base)

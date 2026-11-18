@@ -73,6 +73,7 @@ SET(LMMS_PLUGIN_LIST
 	VstBase
 	Vestige
 	VstEffect
+	Vst3
 	Watsyn
 	WaveShaper
 	Vectorscope

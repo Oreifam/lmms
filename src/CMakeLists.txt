@@ -145,6 +145,11 @@ IF(LMMS_HAVE_WINMM)
 	SET(EXTRA_LIBRARIES "winmm")
 ENDIF()
 
+# avrt.dll hosts MMCSS (AvSetMmThreadCharacteristics). System library on MSVC and MinGW.
+IF(LMMS_BUILD_WIN32)
+	LIST(APPEND EXTRA_LIBRARIES avrt)
+ENDIF()
+
 IF(LMMS_BUILD_APPLE)
 	SET(EXTRA_LIBRARIES "-framework CoreMIDI -framework CoreFoundation")
 ENDIF()

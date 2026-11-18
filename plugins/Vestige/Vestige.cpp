@@ -24,6 +24,10 @@
 
 #include "Vestige.h"
 
+#include <chrono>
+#include <cmath>
+
+#include <QDebug>
 #include <QDomElement>
 #include <QDropEvent>
 #include <QGridLayout>
@@ -404,6 +408,30 @@ void VestigeInstrument::play( SampleFrame* _buf )
 	}
 
 	m_plugin->process( nullptr, _buf );
+	if (_buf != nullptr)
+	{
+		const auto frames = Engine::audioEngine()->framesPerPeriod();
+		bool runaway = false;
+		for (f_cnt_t frame = 0; frame < frames && !runaway; ++frame)
+		{
+			for (int channel = 0; channel < 2; ++channel)
+			{
+				const float sample = _buf[frame][channel];
+				if (!std::isfinite(sample) || std::fabs(sample) > 16.f) { runaway = true; }
+			}
+		}
+		if (runaway)
+		{
+			zeroSampleFrames(_buf, frames);
+			static auto lastLog = std::chrono::steady_clock::time_point{};
+			const auto now = std::chrono::steady_clock::now();
+			if (now - lastLog >= std::chrono::seconds(1))
+			{
+				lastLog = now;
+				qWarning("Vestige muted a period from %s: non-finite or above 16", qUtf8Printable(m_pluginDLL));
+			}
+		}
+	}
 
 	m_pluginMutex.unlock();
 }
