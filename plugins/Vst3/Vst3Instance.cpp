@@ -158,21 +158,16 @@ auto Vst3Instance::defaultSearchPaths() -> QStringList
 
 static auto rejectStoredPluginPath(const QString& stored) -> QString
 {
-	const auto device = stored.startsWith(QLatin1String("\\\\?\\")) || stored.startsWith(QLatin1String("\\\\.\\"))
-		|| stored.startsWith(QLatin1String("//?/")) || stored.startsWith(QLatin1String("//./"));
-	if (device)
-	{
-		return QStringLiteral("Refusing to load a VST3 project path: device paths are not allowed");
-	}
-	if (stored.startsWith(QLatin1String("\\\\")) || stored.startsWith(QLatin1String("//")))
+	const auto normalized = QString(stored).replace(QLatin1Char('\\'), QLatin1Char('/'));
+	// After normalization, UNC (\\server, //server) and device (\\?\, \\.\) paths all start with //.
+	if (normalized.startsWith(QLatin1String("//")))
 	{
 		return QStringLiteral("Refusing to load a VST3 project path: UNC paths are not allowed");
 	}
-	if (!stored.endsWith(QLatin1String(".vst3"), Qt::CaseInsensitive))
+	if (!normalized.endsWith(QLatin1String(".vst3"), Qt::CaseInsensitive))
 	{
 		return QStringLiteral("Refusing to load a VST3 project path: the plugin must end in .vst3");
 	}
-	const auto normalized = QString(stored).replace(QLatin1Char('\\'), QLatin1Char('/'));
 	for (const auto& part : normalized.split(QLatin1Char('/'), Qt::SkipEmptyParts))
 	{
 		if (part == QLatin1String(".."))
@@ -180,9 +175,9 @@ static auto rejectStoredPluginPath(const QString& stored) -> QString
 			return QStringLiteral("Refusing to load a VST3 project path: '..' is not allowed");
 		}
 	}
-	const auto windowsAbsolute = stored.size() >= 3 && stored.at(0).isLetter() && stored.at(1) == QLatin1Char(':')
-		&& (stored.at(2) == QLatin1Char('/') || stored.at(2) == QLatin1Char('\\'));
-	const auto unixAbsolute = stored.startsWith(QLatin1Char('/'));
+	const auto windowsAbsolute = normalized.size() >= 3 && normalized.at(0).isLetter() && normalized.at(1) == QLatin1Char(':')
+		&& normalized.at(2) == QLatin1Char('/');
+	const auto unixAbsolute = normalized.startsWith(QLatin1Char('/'));
 	if (!windowsAbsolute && !unixAbsolute)
 	{
 		return QStringLiteral("Refusing to load a VST3 project path: relative paths are not allowed");

@@ -113,8 +113,10 @@ private slots:
 		};
 		QVERIFY(rejected(QStringLiteral("\\\\server\\share\\Plugin.vst3"), QStringLiteral("UNC")));
 		QVERIFY(rejected(QStringLiteral("//server/share/Plugin.vst3"), QStringLiteral("UNC")));
-		QVERIFY(rejected(QStringLiteral("\\\\?\\C:\\Plugin.vst3"), QStringLiteral("device")));
-		QVERIFY(rejected(QStringLiteral("\\\\.\\C:\\Plugin.vst3"), QStringLiteral("device")));
+		QVERIFY(rejected(QStringLiteral("/\\server\\share\\X.vst3"), QStringLiteral("UNC")));
+		QVERIFY(rejected(QStringLiteral("\\/server/share/X.vst3"), QStringLiteral("UNC")));
+		QVERIFY(rejected(QStringLiteral("\\\\?\\C:\\Plugin.vst3"), QStringLiteral("UNC")));
+		QVERIFY(rejected(QStringLiteral("\\\\.\\C:\\Plugin.vst3"), QStringLiteral("UNC")));
 		QVERIFY(rejected(QStringLiteral("Plugin.vst3"), QStringLiteral("relative")));
 		QVERIFY(rejected(QStringLiteral("/tmp/../etc/Plugin.vst3"), QStringLiteral("..")));
 		QVERIFY(rejected(QStringLiteral("/tmp/Plugin.dll"), QStringLiteral(".vst3")));
