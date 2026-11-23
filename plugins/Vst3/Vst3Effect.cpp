@@ -78,7 +78,11 @@ void Vst3EffectControls::loadSettings(const QDomElement& element)
 	for (const auto& parameter : m_effect->m_instance.parameters())
 	{
 		const auto key = QStringLiteral("vst3p%1").arg(parameter.id);
-		if (element.hasAttribute(key)) { m_effect->m_instance.setNormalized(parameter.id, element.attribute(key).toDouble()); }
+		double value = 0.0;
+		if (element.hasAttribute(key) && Vst3Instance::readStoredNormalized(element.attribute(key), &value))
+		{
+			m_effect->m_instance.setNormalized(parameter.id, value);
+		}
 	}
 }
 

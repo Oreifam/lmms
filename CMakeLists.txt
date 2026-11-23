@@ -19,6 +19,11 @@ endfunction()
 enable_policy_if_exists(CMP0092) # MSVC warning flags are not in CMAKE_<LANG>_FLAGS by default.
 # Needed for ccache support with MSVC
 enable_policy_if_exists(CMP0141) # MSVC debug information format flags are selected by an abstraction.
+# File scope: cmake_policy() inside enable_policy_if_exists() is restored on return.
+# CMake 4.5 makes an unset CMP0225 a fatal author error under -Werror=dev.
+if(POLICY CMP0225)
+	cmake_policy(SET CMP0225 NEW) # ExternalProject sets CMAKE_INSTALL_PREFIX to <INSTALL_DIR>.
+endif()
 
 PROJECT(lmms)
 

@@ -102,12 +102,15 @@ Vst3Panel::~Vst3Panel()
 {
 	if (m_panelAlive) { m_panelAlive->store(false); }
 	const auto life = m_life.lock();
-	if (m_instance != nullptr && life && life->load())
+	const auto instanceAlive = life && life->load();
+	if (m_instance != nullptr && instanceAlive)
 	{
 		m_instance->setParameterEditedHandler(nullptr);
 		m_instance->setEditorResizeHandler(nullptr);
 	}
-	closeEditor();
+	// loadInstrument deletes the instrument before the view, so this hook would
+	// call closeNativeEditor() on a freed Vst3Instrument once the life token is gone.
+	if (instanceAlive) { closeEditor(); }
 	for (auto& row : m_rows)
 	{
 		delete row.model.data();
@@ -186,12 +189,16 @@ void Vst3Panel::setEditorHooks(std::function<void()> open, std::function<void()>
 
 void Vst3Panel::openEditor()
 {
-	if (m_openEditor) { m_openEditor(); }
+	const auto life = m_life.lock();
+	if (!life || !life->load() || !m_openEditor) { return; }
+	m_openEditor();
 }
 
 void Vst3Panel::closeEditor()
 {
-	if (m_closeEditor) { m_closeEditor(); }
+	const auto life = m_life.lock();
+	if (!life || !life->load() || !m_closeEditor) { return; }
+	m_closeEditor();
 }
 
 void Vst3Panel::refresh()

@@ -7,6 +7,7 @@
  */
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -101,6 +102,12 @@ private slots:
 		QVERIFY(plugin.process(audio.data(), 64));
 		QVERIFY(std::fabs(audio[0][0] - 0.7f) < 0.0001f);
 
+		const auto before = plugin.parameters().front().normalized;
+		plugin.setNormalized(plugin.parameters().front().id, std::numeric_limits<double>::quiet_NaN());
+		plugin.setNormalized(plugin.parameters().front().id, std::numeric_limits<double>::infinity());
+		plugin.setNormalized(999999u, 0.5);
+		QCOMPARE(plugin.parameters().front().normalized, before);
+
 		QString missing;
 		QVERIFY(!plugin.load(root.path() + QStringLiteral("/missing.vst3"), 48000, 256, &missing));
 		QVERIFY(missing.contains(QStringLiteral("not found")));
@@ -179,6 +186,39 @@ private slots:
 			instance.reset();
 			delete panel;
 		}
+	}
+
+	void PanelDestroyedAfterInstrument()
+	{
+		lmms::ConfigManager::inst();
+		auto calls = 0;
+		auto* instrument = new lmms::Vst3Instance;
+		auto* panel = new lmms::gui::Vst3Panel(instrument, nullptr);
+		panel->setEditorHooks([&calls] { ++calls; }, [&calls] { ++calls; });
+		delete instrument;
+		delete panel;
+		QCOMPARE(calls, 0);
+
+		calls = 0;
+		auto* stillAlive = new lmms::Vst3Instance;
+		auto* openPanel = new lmms::gui::Vst3Panel(stillAlive, nullptr);
+		openPanel->setEditorHooks([&calls] { ++calls; }, [&calls] { ++calls; });
+		delete openPanel;
+		QCOMPARE(calls, 1);
+		delete stillAlive;
+	}
+
+	void RejectsNonFiniteParameterAttributes()
+	{
+		auto value = 0.25;
+		QVERIFY(!lmms::Vst3Instance::readStoredNormalized(QStringLiteral("nan"), &value));
+		QVERIFY(!lmms::Vst3Instance::readStoredNormalized(QStringLiteral("NaN"), &value));
+		QVERIFY(!lmms::Vst3Instance::readStoredNormalized(QStringLiteral("inf"), &value));
+		QVERIFY(!lmms::Vst3Instance::readStoredNormalized(QStringLiteral("-inf"), &value));
+		QVERIFY(!lmms::Vst3Instance::readStoredNormalized(QStringLiteral("not-a-number"), &value));
+		QCOMPARE(value, 0.25);
+		QVERIFY(lmms::Vst3Instance::readStoredNormalized(QStringLiteral("0.4"), &value));
+		QCOMPARE(value, 0.4);
 	}
 
 	void MidiQueueKeepsNoteOffAndRejectsPitch()

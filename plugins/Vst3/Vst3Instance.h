@@ -113,6 +113,8 @@ public:
 
 	auto parameters() const -> std::vector<Parameter>;
 	void setNormalized(unsigned int id, double normalized);
+	//! Parses a project attribute. Rejects non-numeric text and non-finite values such as nan and inf.
+	static auto readStoredNormalized(const QString& text, double* value) -> bool;
 	//! Called on the UI thread when the plugin editor edits a parameter.
 	void setParameterEditedHandler(std::function<void(unsigned int id, double normalized)> handler);
 

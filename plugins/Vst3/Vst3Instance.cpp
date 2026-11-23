@@ -117,22 +117,30 @@ struct Vst3Instance::Impl
 	std::array<std::array<MidiSlot, kMidiControllerCount>, kMidiChannelCount> midiMap{};
 	std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);
 
-	void queueParam(unsigned int id, double value)
+	auto queueParam(unsigned int id, double value) -> bool
 	{
+		if (!std::isfinite(value)) { return false; }
 		value = std::clamp(value, 0.0, 1.0);
+		auto known = false;
 		for (auto& parameter : parameters)
 		{
-			if (parameter.id == id) { parameter.normalized = value; }
+			if (parameter.id == id)
+			{
+				parameter.normalized = value;
+				known = true;
+			}
 		}
+		if (!known) { return false; }
 		for (auto& pending : dirtyParameters)
 		{
 			if (pending.id == id)
 			{
 				pending.value = value;
-				return;
+				return true;
 			}
 		}
 		dirtyParameters.push_back({id, value});
+		return true;
 	}
 
 	void rebuildMidiMap()
@@ -230,11 +238,12 @@ public:
 	Steinberg::tresult PLUGIN_API performEdit(Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue value) override
 	{
 		if (m_impl == nullptr) { return Steinberg::kResultOk; }
+		if (!std::isfinite(static_cast<double>(value))) { return Steinberg::kResultOk; }
 		const auto clamped = std::clamp(static_cast<double>(value), 0.0, 1.0);
 		std::function<void(unsigned int, double)> callback;
 		{
 			std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
-			m_impl->queueParam(id, clamped);
+			if (!m_impl->queueParam(id, clamped)) { return Steinberg::kResultOk; }
 			callback = m_impl->parameterEdited;
 		}
 		if (!callback) { return Steinberg::kResultOk; }
@@ -654,10 +663,19 @@ auto Vst3Instance::parameters() const -> std::vector<Parameter>
 void Vst3Instance::setNormalized(unsigned int id, double normalized)
 {
 	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
-	if (!m_impl->loaded || m_impl->broken) { return; }
+	if (!m_impl->loaded || m_impl->broken || !std::isfinite(normalized)) { return; }
 	const auto value = std::clamp(normalized, 0.0, 1.0);
-	m_impl->queueParam(id, value);
+	if (!m_impl->queueParam(id, value)) { return; }
 	if (m_impl->controller) { m_impl->controller->setParamNormalized(id, value); }
+}
+
+auto Vst3Instance::readStoredNormalized(const QString& text, double* value) -> bool
+{
+	auto ok = false;
+	const auto parsed = text.toDouble(&ok);
+	if (!ok || !std::isfinite(parsed)) { return false; }
+	if (value != nullptr) { *value = std::clamp(parsed, 0.0, 1.0); }
+	return true;
 }
 
 void Vst3Instance::setParameterEditedHandler(std::function<void(unsigned int, double)> handler)
