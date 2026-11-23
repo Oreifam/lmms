@@ -245,6 +245,12 @@ int noInputFileError()
 
 int main( int argc, char * * argv )
 {
+#ifdef LMMS_BUILD_WIN32
+	// Do not search the process current directory or a plugin's folder for dependent DLLs.
+	SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+	SetDllDirectoryW(L"");
+#endif
+
 	using namespace lmms;
 
 	bool coreOnly = false;

@@ -19,6 +19,11 @@ endfunction()
 enable_policy_if_exists(CMP0092) # MSVC warning flags are not in CMAKE_<LANG>_FLAGS by default.
 # Needed for ccache support with MSVC
 enable_policy_if_exists(CMP0141) # MSVC debug information format flags are selected by an abstraction.
+# File scope: cmake_policy() inside enable_policy_if_exists() is restored on return.
+# CMake 4.5 makes an unset CMP0225 a fatal author error under -Werror=dev.
+if(POLICY CMP0225)
+	cmake_policy(SET CMP0225 NEW) # ExternalProject sets CMAKE_INSTALL_PREFIX to <INSTALL_DIR>.
+endif()
 
 PROJECT(lmms)
 
@@ -100,6 +105,13 @@ OPTION(WANT_TAP		"Include Tom's Audio Processing LADSPA plugins" ON)
 OPTION(WANT_VST		"Include VST support" ON)
 OPTION(WANT_VST_32	"Include 32-bit Windows VST support" ON)
 OPTION(WANT_VST_64	"Include 64-bit Windows VST support" ON)
+# In-process VST3. On for the Windows MSVC build; other platforms can turn it on.
+if(LMMS_BUILD_WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+	set(_want_vst3_default ON)
+else()
+	set(_want_vst3_default OFF)
+endif()
+option(WANT_VST3 "In-process VST3 hosting (Steinberg SDK 3.8.1)" ${_want_vst3_default})
 OPTION(WANT_WINMM	"Include WinMM MIDI support" OFF)
 OPTION(WANT_DEBUG_FPE	"Debug floating point exceptions" OFF)
 option(WANT_DEBUG_ASAN	"Enable AddressSanitizer" OFF)

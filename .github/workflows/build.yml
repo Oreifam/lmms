@@ -1,6 +1,6 @@
 ---
 name: build
-'on': [push, pull_request]
+'on': [push, pull_request, workflow_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -415,6 +415,7 @@ jobs:
             -G Ninja `
             --toolchain C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
             -Werror=dev `
+            -Wno-error=non-target-directive `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DTARGET_UARCH=official `
             -DWANT_QT6=ON `
@@ -437,7 +438,9 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
+          name: lmms-windows-x64-msvc
           archive: false
+          if-no-files-found: error
           path: build\lmms-*.exe
       - name: Trim ccache and print statistics
         run: |

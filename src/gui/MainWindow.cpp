@@ -34,8 +34,11 @@
 #include <QMessageBox>
 #include <QShortcut>
 #include <QSplitter>
+#include <QStatusBar>
 
 #include "AboutDialog.h"
+#include "AudioEngine.h"
+#include "AudioPortAudio.h"
 #include "AutomationEditor.h"
 #include "ControllerRackView.h"
 #include "DeprecationHelper.h"
@@ -488,6 +491,13 @@ void MainWindow::finalize()
 		SetupDialog sd( SetupDialog::ConfigTab::AudioSettings );
 		sd.exec();
 	}
+#ifdef LMMS_HAVE_PORTAUDIO
+	else if (const auto notice = AudioPortAudio::unseenStartupNotice(); !notice.isEmpty())
+	{
+		QMessageBox::information(this, tr("Audio device"), notice);
+		AudioPortAudio::acknowledgeStartupNotice();
+	}
+#endif // LMMS_HAVE_PORTAUDIO
 
 	// Add editor subwindows
 	addWindowedWidget(getGUI()->automationEditor());
@@ -1366,6 +1376,10 @@ void MainWindow::keyReleaseEvent( QKeyEvent * _ke )
 void MainWindow::timerEvent( QTimerEvent * _te)
 {
 	emit periodicUpdate();
+	if (auto* engine = Engine::audioEngine(); engine != nullptr && engine->takeHearingBurstNotice())
+	{
+		statusBar()->showMessage(tr("Loud burst blocked to protect your hearing"), 5000);
+	}
 }
 
 

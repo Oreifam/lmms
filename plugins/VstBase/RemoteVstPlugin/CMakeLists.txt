@@ -108,6 +108,16 @@ endif()
 
 if(BITNESS EQUAL 32)
 	INSTALL(TARGETS ${EXE_NAME} RUNTIME DESTINATION "${PLUGIN_DIR}/32")
+	if(MSVC)
+		include(DeployMsvcCrt)
+		lmms_deploy_msvc_crt(32 "${PLUGIN_DIR}/32")
+		# CMAKE_INSTALL_PREFIX is the parent's staging prefix when this
+		# file is included from the parent's install step.
+		install(CODE "
+			set(REMOTE_VST32_DIR \"\${CMAKE_INSTALL_PREFIX}/${PLUGIN_DIR}/32\")
+			include(\"${LMMS_SOURCE_DIR}/cmake/install/VerifyRemoteVstPlugin32.cmake\")
+		")
+	endif()
 else()
 	INSTALL(TARGETS ${EXE_NAME} RUNTIME DESTINATION "${PLUGIN_DIR}")
 endif()

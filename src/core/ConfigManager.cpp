@@ -36,6 +36,7 @@
 #include "MainWindow.h"
 #include "PathUtil.h"
 #include "ProjectVersion.h"
+#include "lmmsconfig.h"
 #include "lmmsversion.h"
 
 namespace lmms
@@ -45,7 +46,7 @@ namespace lmms
 // Vector with all the upgrade methods
 const std::vector<ConfigManager::UpgradeMethod> ConfigManager::UPGRADE_METHODS = {
 	&ConfigManager::upgrade_1_1_90    ,    &ConfigManager::upgrade_1_1_91,
-	&ConfigManager::upgrade_1_2_2
+	&ConfigManager::upgrade_1_2_2, &ConfigManager::upgrade_1_3_0_wasapi
 };
 
 static inline QString ensureTrailingSlash(const QString & s )
@@ -74,6 +75,7 @@ ConfigManager::ConfigManager() :
 		initInstalledWorkingDir();
 	}
 	m_dataDir = "data:/";
+	m_userSamplesDir = m_workingDir + SAMPLES_PATH;
 	m_vstDir = m_workingDir + "vst/";
 	m_sf2Dir = m_workingDir + SF2_PATH;
 	m_gigDir = m_workingDir + GIG_PATH;
@@ -152,6 +154,40 @@ void ConfigManager::upgrade_1_2_2()
 	}
 
 	m_settings.remove("mixer");
+}
+
+void ConfigManager::upgrade_1_3_0_wasapi()
+{
+#ifdef LMMS_BUILD_WIN32
+	// One shot even if a later LMMS version runs upgrades again.
+	if (value("audioportaudio", "wasapimigrated") == "1")
+	{
+		return;
+	}
+	setValue("audioportaudio", "wasapimigrated", "1");
+
+#ifdef LMMS_HAVE_PORTAUDIO
+	const auto device = value("audioengine", "audiodev");
+	const auto isSdl = device == QLatin1String("SDL (Simple DirectMedia Layer)")
+		|| device.startsWith(QLatin1String("SDL"));
+	if (!isSdl)
+	{
+		return;
+	}
+
+	setValue("audioengine", "audiodev", "PortAudio");
+	setValue("audioportaudio", "backend", "Windows WASAPI");
+	setValue("audioportaudio", "wasapimode", "shared");
+	// migrationfallback is cleared when the open succeeds or SDL is restored.
+	setValue("audioportaudio", "migrationfallback", "1");
+
+	const auto frames = value("audioengine", "framesperaudiobuffer").toInt();
+	if (frames != 256 && frames != 512 && frames != 1024)
+	{
+		setValue("audioengine", "framesperaudiobuffer", "512");
+	}
+#endif // LMMS_HAVE_PORTAUDIO
+#endif // LMMS_BUILD_WIN32
 }
 
 void ConfigManager::upgrade()
@@ -235,6 +271,11 @@ void ConfigManager::setWorkingDir(const QString & workingDir)
 
 
 
+void ConfigManager::setUserSamplesDir(const QString & samplesDir)
+{
+	m_userSamplesDir = ensureTrailingSlash(samplesDir);
+}
+
 void ConfigManager::setVSTDir(const QString & vstDir)
 {
 	m_vstDir = ensureTrailingSlash(vstDir);
@@ -306,7 +347,13 @@ void ConfigManager::createWorkingDir()
 
 	QDir().mkpath(userProjectsDir());
 	QDir().mkpath(userTemplateDir());
-	QDir().mkpath(userSamplesDir());
+	// Always create the default samples folder inside the working directory.
+	// A custom samples directory is additional and does not replace this one.
+	QDir().mkpath(m_workingDir + SAMPLES_PATH);
+	if (QDir::cleanPath(userSamplesDir()) != QDir::cleanPath(m_workingDir + SAMPLES_PATH))
+	{
+		QDir().mkpath(userSamplesDir());
+	}
 	QDir().mkpath(userPresetsDir());
 	QDir().mkpath(userGigDir());
 	QDir().mkpath(userSf2Dir());
@@ -523,6 +570,9 @@ void ConfigManager::loadConfigFile(const QString & configFile)
 				m_themeDir = ensureTrailingSlash(m_themeDir);
 			}
 			setWorkingDir(value("paths", "workingdir"));
+			setUserSamplesDir(value("paths", "samplesdir").isEmpty()
+				? workingDir() + SAMPLES_PATH
+				: value("paths", "samplesdir"));
 
 			setGIGDir(value("paths", "gigdir") == "" ? gigDir() : value("paths", "gigdir"));
 			setSF2Dir(value("paths", "sf2dir") == "" ? sf2Dir() : value("paths", "sf2dir"));
@@ -619,6 +669,7 @@ void ConfigManager::saveConfigFile()
 {
 	setValue("paths", "theme", m_themeDir);
 	setValue("paths", "workingdir", m_workingDir);
+	setValue("paths", "samplesdir", m_userSamplesDir);
 	setValue("paths", "vstdir", m_vstDir);
 	setValue("paths", "gigdir", m_gigDir);
 	setValue("paths", "sf2dir", m_sf2Dir);
