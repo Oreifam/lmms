@@ -107,7 +107,7 @@ Vst3EffectDialog::Vst3EffectDialog(Vst3EffectControls* controls)
 	auto* layout = new QVBoxLayout(this);
 	if (effect != nullptr)
 	{
-		layout->addWidget(new Vst3Panel(&effect->instance(), this));
+		layout->addWidget(new Vst3Panel(&effect->instance(), effect, this));
 	}
 }
 

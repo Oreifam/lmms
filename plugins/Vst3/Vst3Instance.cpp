@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -20,6 +21,7 @@
 #include <QFileInfo>
 
 #include "ConfigManager.h"
+#include "Midi.h"
 #include "SampleFrame.h"
 #include "lmmsconfig.h"
 
@@ -30,8 +32,10 @@
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/hosting/plugprovider.h"
 #include "public.sdk/source/vst/hosting/processdata.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
 
 namespace lmms
 {
@@ -39,7 +43,8 @@ namespace
 {
 
 constexpr int kMaxNotes = 256;
-constexpr int kMaxParametersQueued = 64;
+constexpr int kMaxParametersQueued = 512;
+constexpr int kMaxEditorExtent = 4096;
 
 auto hostApplication() -> Steinberg::Vst::HostApplication&
 {
@@ -74,7 +79,18 @@ auto readChunk(const QByteArray& state, int& cursor) -> QByteArray
 
 struct Vst3Instance::Impl
 {
-	std::mutex mutex;
+	std::recursive_mutex mutex;
+
+	void detachEditorUnlocked()
+	{
+		if (plugView)
+		{
+			plugView->removed();
+			plugView->setFrame(nullptr);
+			plugView.reset();
+		}
+		plugFrame.reset();
+	}
 	VST3::Hosting::Module::Ptr module;
 	std::unique_ptr<Steinberg::Vst::PlugProvider> provider;
 	Steinberg::IPtr<Steinberg::Vst::IComponent> component;
@@ -89,7 +105,15 @@ struct Vst3Instance::Impl
 	std::vector<float> outputRight;
 	std::vector<Parameter> parameters;
 	std::vector<unsigned int> dirtyParameters;
-	std::vector<MidiNote> notes;
+	std::vector<MidiMessage> messages;
+	std::function<void(unsigned int, double)> parameterEdited;
+	std::function<void(int, int)> editorResize;
+	Steinberg::IPtr<Steinberg::Vst::IComponentHandler> componentHandler;
+	Steinberg::IPtr<Steinberg::Vst::IMidiMapping> midiMapping;
+	Steinberg::IPtr<Steinberg::IPlugView> plugView;
+	Steinberg::IPtr<Steinberg::IPlugFrame> plugFrame;
+	bool editorSupported = false;
+	bool inPluginEdit = false;
 	QString path;
 	QString classUid;
 	QString pluginName;
@@ -106,6 +130,7 @@ struct Vst3Instance::Impl
 
 	void reset()
 	{
+		detachEditorUnlocked();
 		if (processing && processor)
 		{
 			processor->setProcessing(false);
@@ -123,7 +148,10 @@ struct Vst3Instance::Impl
 		module.reset();
 		parameters.clear();
 		dirtyParameters.clear();
-		notes.clear();
+		messages.clear();
+		componentHandler.reset();
+		midiMapping.reset();
+		editorSupported = false;
 		loaded = false;
 		broken = false;
 		latency = 0;
@@ -131,6 +159,77 @@ struct Vst3Instance::Impl
 		outputChannels = 0;
 	}
 };
+
+class ComponentHandler : public Steinberg::Vst::IComponentHandler
+{
+public:
+	explicit ComponentHandler(Vst3Instance::Impl* impl)
+		: m_impl(impl)
+	{
+		FUNKNOWN_CTOR
+	}
+	~ComponentHandler() { FUNKNOWN_DTOR }
+
+	Steinberg::tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID) override { return Steinberg::kResultOk; }
+
+	Steinberg::tresult PLUGIN_API performEdit(Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue value) override
+	{
+		if (m_impl == nullptr) { return Steinberg::kResultOk; }
+		std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+		m_impl->inPluginEdit = true;
+		for (auto& parameter : m_impl->parameters)
+		{
+			if (parameter.id == id) { parameter.normalized = value; }
+		}
+		if (std::find(m_impl->dirtyParameters.begin(), m_impl->dirtyParameters.end(), id) == m_impl->dirtyParameters.end())
+		{
+			m_impl->dirtyParameters.push_back(id);
+		}
+		const auto callback = m_impl->parameterEdited;
+		if (callback) { callback(id, value); }
+		m_impl->inPluginEdit = false;
+		return Steinberg::kResultOk;
+	}
+
+	Steinberg::tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID) override { return Steinberg::kResultOk; }
+	Steinberg::tresult PLUGIN_API restartComponent(Steinberg::int32) override { return Steinberg::kNotImplemented; }
+
+	DECLARE_FUNKNOWN_METHODS
+private:
+	Vst3Instance::Impl* m_impl;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(ComponentHandler, Steinberg::Vst::IComponentHandler, Steinberg::Vst::IComponentHandler::iid)
+
+class EditorFrame : public Steinberg::IPlugFrame
+{
+public:
+	explicit EditorFrame(Vst3Instance::Impl* impl)
+		: m_impl(impl)
+	{
+		FUNKNOWN_CTOR
+	}
+	~EditorFrame() { FUNKNOWN_DTOR }
+
+	Steinberg::tresult PLUGIN_API resizeView(Steinberg::IPlugView*, Steinberg::ViewRect* newSize) override
+	{
+		if (newSize == nullptr) { return Steinberg::kInvalidArgument; }
+		const auto width = newSize->getWidth();
+		const auto height = newSize->getHeight();
+		if (width < 1 || height < 1 || width > kMaxEditorExtent || height > kMaxEditorExtent)
+		{
+			return Steinberg::kResultFalse;
+		}
+		if (m_impl != nullptr && m_impl->editorResize) { m_impl->editorResize(width, height); }
+		return Steinberg::kResultTrue;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+private:
+	Vst3Instance::Impl* m_impl;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(EditorFrame, Steinberg::IPlugFrame, Steinberg::IPlugFrame::iid)
 
 Vst3Instance::Vst3Instance() : m_impl(std::make_unique<Impl>()) {}
 
@@ -224,7 +323,7 @@ auto Vst3Instance::loadFromProject(const QString& storedPath, const QString& sav
 	const auto accepted = acceptedProjectPath(storedPath, &error);
 	if (accepted.isEmpty())
 	{
-		std::lock_guard<std::mutex> lock(m_impl->mutex);
+		std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 		m_impl->error = error;
 		return false;
 	}
@@ -234,7 +333,7 @@ auto Vst3Instance::loadFromProject(const QString& storedPath, const QString& sav
 		const auto message = QStringLiteral("Refusing to load %1: its class id does not match the project").arg(accepted);
 		qWarning("%s", qUtf8Printable(message));
 		unload();
-		std::lock_guard<std::mutex> lock(m_impl->mutex);
+		std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 		m_impl->error = message;
 		return false;
 	}
@@ -275,7 +374,7 @@ auto Vst3Instance::scanDirectory(const QString& root) -> QStringList
 
 void Vst3Instance::unload()
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 	m_impl->reset();
 	m_impl->path.clear();
 	m_impl->classUid.clear();
@@ -284,7 +383,7 @@ void Vst3Instance::unload()
 
 auto Vst3Instance::load(const QString& path, int sampleRate, int maxBlock, QString* error) -> bool
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 	m_impl->reset();
 	m_impl->error.clear();
 	m_impl->announced = false;
@@ -409,6 +508,21 @@ auto Vst3Instance::load(const QString& path, int sampleRate, int maxBlock, QStri
 			}
 		}
 
+		auto handler = Steinberg::owned(new ComponentHandler(m_impl.get()));
+		if (controller)
+		{
+			controller->setComponentHandler(handler);
+			m_impl->componentHandler = handler;
+			m_impl->midiMapping = Steinberg::U::cast<Steinberg::Vst::IMidiMapping>(controller);
+#ifdef LMMS_BUILD_WIN32
+			Steinberg::IPtr<Steinberg::IPlugView> view(Steinberg::owned(controller->createView(Steinberg::Vst::ViewType::kEditor)));
+			if (view && view->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) == Steinberg::kResultTrue)
+			{
+				m_impl->editorSupported = true;
+			}
+#endif
+		}
+
 		qInfo("VST3 loaded %s, latency %d samples", qUtf8Printable(m_impl->pluginName), m_impl->latency);
 		if (error != nullptr) { error->clear(); }
 		return true;
@@ -436,14 +550,14 @@ auto Vst3Instance::latencySamples() const -> int { return m_impl->latency; }
 
 auto Vst3Instance::parameters() const -> std::vector<Parameter>
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 	return m_impl->parameters;
 }
 
 void Vst3Instance::setNormalized(unsigned int id, double normalized)
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
-	if (!m_impl->loaded || m_impl->broken) { return; }
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+	if (!m_impl->loaded || m_impl->broken || m_impl->inPluginEdit) { return; }
 	const auto value = std::clamp(normalized, 0.0, 1.0);
 	for (auto& parameter : m_impl->parameters)
 	{
@@ -459,17 +573,123 @@ void Vst3Instance::setNormalized(unsigned int id, double normalized)
 	}
 }
 
+void Vst3Instance::setParameterEditedHandler(std::function<void(unsigned int, double)> handler)
+{
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+	m_impl->parameterEdited = std::move(handler);
+}
+
+auto Vst3Instance::editorSupported() const -> bool
+{
+	return m_impl->editorSupported;
+}
+
+auto Vst3Instance::attachEditor(void* parentWindow) -> bool
+{
+#ifdef LMMS_BUILD_WIN32
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+	if (!m_impl->editorSupported || parentWindow == nullptr || !m_impl->controller) { return false; }
+	if (m_impl->plugView) { return true; }
+	Steinberg::IPtr<Steinberg::IPlugView> view(Steinberg::owned(m_impl->controller->createView(Steinberg::Vst::ViewType::kEditor)));
+	if (!view) { return false; }
+	auto frame = Steinberg::owned(new EditorFrame(m_impl.get()));
+	view->setFrame(frame);
+	if (view->attached(parentWindow, Steinberg::kPlatformTypeHWND) != Steinberg::kResultOk)
+	{
+		view->setFrame(nullptr);
+		return false;
+	}
+	Steinberg::ViewRect rect{};
+	if (view->getSize(&rect) == Steinberg::kResultOk && m_impl->editorResize)
+	{
+		const auto width = std::clamp(rect.getWidth(), 1, kMaxEditorExtent);
+		const auto height = std::clamp(rect.getHeight(), 1, kMaxEditorExtent);
+		m_impl->editorResize(width, height);
+	}
+	m_impl->plugFrame = frame;
+	m_impl->plugView = view;
+	return true;
+#else
+	(void)parentWindow;
+	return false;
+#endif
+}
+
+void Vst3Instance::detachEditor()
+{
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+	m_impl->detachEditorUnlocked();
+}
+
+void Vst3Instance::setEditorResizeHandler(std::function<void(int, int)> handler)
+{
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+	m_impl->editorResize = std::move(handler);
+}
+
 void Vst3Instance::addNote(const MidiNote& note)
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
-	if (m_impl->notes.size() >= kMaxNotes) { m_impl->notes.erase(m_impl->notes.begin()); }
-	m_impl->notes.push_back(note);
+	MidiMessage message;
+	message.kind = note.on ? MidiKind::NoteOn : MidiKind::NoteOff;
+	message.channel = note.channel;
+	message.data = note.pitch;
+	message.value = note.velocity;
+	message.offset = note.offset;
+	addMidi(message);
+}
+
+void Vst3Instance::addMidi(const MidiMessage& message)
+{
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
+	if (m_impl->messages.size() >= kMaxNotes) { m_impl->messages.erase(m_impl->messages.begin()); }
+	m_impl->messages.push_back(message);
+}
+
+auto Vst3Instance::routeMidi(int type, int data1, int data2) -> MidiRoute
+{
+	MidiRoute route;
+	switch (type)
+	{
+	case MidiNoteOn:
+		route.kind = data2 > 0 ? MidiRoute::Kind::NoteOn : MidiRoute::Kind::NoteOff;
+		route.key = data1;
+		route.normalized = std::clamp(data2, 0, 127) / 127.0;
+		break;
+	case MidiNoteOff:
+		route.kind = MidiRoute::Kind::NoteOff;
+		route.key = data1;
+		route.normalized = std::clamp(data2, 0, 127) / 127.0;
+		break;
+	case MidiPitchBend:
+		route.kind = MidiRoute::Kind::PitchBend;
+		route.controller = Steinberg::Vst::kPitchBend;
+		route.normalized = std::clamp(data1, 0, MidiMaxPitchBend) / static_cast<double>(MidiMaxPitchBend);
+		break;
+	case MidiControlChange:
+		route.kind = MidiRoute::Kind::ControlChange;
+		route.controller = data1 & 0x7f;
+		route.normalized = std::clamp(data2, 0, 127) / 127.0;
+		break;
+	case MidiChannelPressure:
+		route.kind = MidiRoute::Kind::ChannelPressure;
+		route.controller = Steinberg::Vst::kAfterTouch;
+		route.normalized = std::clamp(data1, 0, 127) / 127.0;
+		break;
+	case MidiKeyPressure:
+		route.kind = MidiRoute::Kind::KeyPressure;
+		route.key = data1 & 0x7f;
+		route.normalized = std::clamp(data2, 0, 127) / 127.0;
+		break;
+	default:
+		break;
+	}
+	return route;
 }
 
 auto Vst3Instance::process(SampleFrame* buf, f_cnt_t frames) -> bool
 {
 	if (buf == nullptr || frames <= 0) { return false; }
-	std::unique_lock<std::mutex> lock(m_impl->mutex, std::try_to_lock);
+	std::unique_lock<std::recursive_mutex> lock(m_impl->mutex, std::try_to_lock);
 	if (!lock.owns_lock())
 	{
 		clearBuffer(buf, frames);
@@ -524,34 +744,69 @@ auto Vst3Instance::process(SampleFrame* buf, f_cnt_t frames) -> bool
 		m_impl->processData.numSamples = frames;
 
 		m_impl->events.clear();
-		for (const auto& note : m_impl->notes)
+		auto assignMapped = [&](int controller, int channel, double normalized) {
+			if (m_impl->midiMapping == nullptr || controller < 0) { return; }
+			ParamID id = 0;
+			if (m_impl->midiMapping->getMidiControllerAssignment(0, static_cast<int16>(channel), controller, id) != kResultTrue)
+			{
+				return;
+			}
+			for (auto& parameter : m_impl->parameters)
+			{
+				if (parameter.id == id) { parameter.normalized = normalized; }
+			}
+			if (std::find(m_impl->dirtyParameters.begin(), m_impl->dirtyParameters.end(), id) == m_impl->dirtyParameters.end())
+			{
+				m_impl->dirtyParameters.push_back(id);
+			}
+		};
+		for (const auto& message : m_impl->messages)
 		{
 			Event event{};
 			event.busIndex = 0;
-			event.sampleOffset = std::clamp(note.offset, 0, static_cast<int>(frames) - 1);
+			event.sampleOffset = std::clamp(message.offset, 0, static_cast<int>(frames) - 1);
 			event.flags = Event::kIsLive;
-			if (note.on)
+			switch (message.kind)
 			{
+			case MidiKind::NoteOn:
 				event.type = Event::kNoteOnEvent;
-				event.noteOn.channel = static_cast<int16>(note.channel);
-				event.noteOn.pitch = static_cast<int16>(note.pitch);
+				event.noteOn.channel = static_cast<int16>(message.channel);
+				event.noteOn.pitch = static_cast<int16>(message.data);
 				event.noteOn.tuning = 0.f;
-				event.noteOn.velocity = std::clamp(note.velocity, 0.f, 1.f);
+				event.noteOn.velocity = std::clamp(message.value, 0.f, 1.f);
 				event.noteOn.length = 0;
 				event.noteOn.noteId = -1;
-			}
-			else
-			{
+				m_impl->events.addEvent(event);
+				break;
+			case MidiKind::NoteOff:
 				event.type = Event::kNoteOffEvent;
-				event.noteOff.channel = static_cast<int16>(note.channel);
-				event.noteOff.pitch = static_cast<int16>(note.pitch);
-				event.noteOff.velocity = std::clamp(note.velocity, 0.f, 1.f);
+				event.noteOff.channel = static_cast<int16>(message.channel);
+				event.noteOff.pitch = static_cast<int16>(message.data);
+				event.noteOff.velocity = std::clamp(message.value, 0.f, 1.f);
 				event.noteOff.noteId = -1;
 				event.noteOff.tuning = 0.f;
+				m_impl->events.addEvent(event);
+				break;
+			case MidiKind::KeyPressure:
+				event.type = Event::kPolyPressureEvent;
+				event.polyPressure.channel = static_cast<int16>(message.channel);
+				event.polyPressure.pitch = static_cast<int16>(message.data);
+				event.polyPressure.pressure = std::clamp(message.value, 0.f, 1.f);
+				event.polyPressure.noteId = -1;
+				m_impl->events.addEvent(event);
+				break;
+			case MidiKind::PitchBend:
+				assignMapped(Steinberg::Vst::kPitchBend, message.channel, message.value);
+				break;
+			case MidiKind::ControlChange:
+				assignMapped(message.data, message.channel, message.value);
+				break;
+			case MidiKind::ChannelPressure:
+				assignMapped(Steinberg::Vst::kAfterTouch, message.channel, message.value);
+				break;
 			}
-			m_impl->events.addEvent(event);
 		}
-		m_impl->notes.clear();
+		m_impl->messages.clear();
 		m_impl->processData.inputEvents = &m_impl->events;
 
 		m_impl->parameterChanges.clearQueue();
@@ -609,7 +864,7 @@ auto Vst3Instance::process(SampleFrame* buf, f_cnt_t frames) -> bool
 
 auto Vst3Instance::saveState() const -> QByteArray
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 	if (!m_impl->loaded || !m_impl->component) { return {}; }
 	QByteArray state;
 	auto append = [&state](Steinberg::Vst::IComponent* component, Steinberg::Vst::IEditController* controller, bool controllerState) {
@@ -633,7 +888,7 @@ auto Vst3Instance::saveState() const -> QByteArray
 
 auto Vst3Instance::restoreState(const QByteArray& state) -> bool
 {
-	std::lock_guard<std::mutex> lock(m_impl->mutex);
+	std::lock_guard<std::recursive_mutex> lock(m_impl->mutex);
 	if (!m_impl->loaded || state.isEmpty() || !m_impl->component) { return false; }
 	auto cursor = 0;
 	const auto componentChunk = readChunk(state, cursor);

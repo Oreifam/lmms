@@ -85,14 +85,40 @@ gui::PluginView* Vst3Instrument::instantiateView(QWidget* parent)
 
 bool Vst3Instrument::handleMidiEvent(const MidiEvent& event, const TimePos&, f_cnt_t offset)
 {
-	if (event.type() != MidiNoteOn && event.type() != MidiNoteOff) { return true; }
-	Vst3Instance::MidiNote note;
-	note.on = event.type() == MidiNoteOn && event.velocity() > 0;
-	note.channel = event.channel();
-	note.pitch = event.key();
-	note.velocity = event.velocity() / 127.f;
-	note.offset = offset;
-	m_instance.addNote(note);
+	const auto route = Vst3Instance::routeMidi(event.type(), event.param(0), event.param(1));
+	if (route.kind == Vst3Instance::MidiRoute::Kind::None) { return true; }
+	Vst3Instance::MidiMessage message;
+	message.channel = event.channel();
+	message.offset = offset;
+	message.value = static_cast<float>(route.normalized);
+	switch (route.kind)
+	{
+	case Vst3Instance::MidiRoute::Kind::NoteOn:
+		message.kind = Vst3Instance::MidiKind::NoteOn;
+		message.data = route.key;
+		break;
+	case Vst3Instance::MidiRoute::Kind::NoteOff:
+		message.kind = Vst3Instance::MidiKind::NoteOff;
+		message.data = route.key;
+		break;
+	case Vst3Instance::MidiRoute::Kind::PitchBend:
+		message.kind = Vst3Instance::MidiKind::PitchBend;
+		break;
+	case Vst3Instance::MidiRoute::Kind::ControlChange:
+		message.kind = Vst3Instance::MidiKind::ControlChange;
+		message.data = route.controller;
+		break;
+	case Vst3Instance::MidiRoute::Kind::ChannelPressure:
+		message.kind = Vst3Instance::MidiKind::ChannelPressure;
+		break;
+	case Vst3Instance::MidiRoute::Kind::KeyPressure:
+		message.kind = Vst3Instance::MidiKind::KeyPressure;
+		message.data = route.key;
+		break;
+	case Vst3Instance::MidiRoute::Kind::None:
+		return true;
+	}
+	m_instance.addMidi(message);
 	return true;
 }
 
@@ -105,7 +131,7 @@ Vst3InstrumentView::Vst3InstrumentView(Instrument* instrument, QWidget* parent)
 	auto* trackInstrument = castModel<Vst3Instrument>();
 	auto* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(4, 4, 4, 4);
-	layout->addWidget(new Vst3Panel(&trackInstrument->instance(), this));
+	layout->addWidget(new Vst3Panel(&trackInstrument->instance(), trackInstrument, this));
 }
 
 } // namespace gui

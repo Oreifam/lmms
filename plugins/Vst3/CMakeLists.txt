@@ -124,6 +124,7 @@ target_include_directories(lmms_vst3host PUBLIC
 )
 target_link_libraries(lmms_vst3host PUBLIC
 	lmms_vst3_sdk
+	SampleRate::samplerate
 	Qt${QT_VERSION_MAJOR}::Core
 	Qt${QT_VERSION_MAJOR}::Widgets
 )

@@ -17,6 +17,7 @@
 #include <QtTest>
 
 #include "ConfigManager.h"
+#include "Midi.h"
 #include "SampleFrame.h"
 #include "Vst3Instance.h"
 
@@ -120,6 +121,24 @@ private slots:
 		QVERIFY(rejected(QStringLiteral("Plugin.vst3"), QStringLiteral("relative")));
 		QVERIFY(rejected(QStringLiteral("/tmp/../etc/Plugin.vst3"), QStringLiteral("..")));
 		QVERIFY(rejected(QStringLiteral("/tmp/Plugin.dll"), QStringLiteral(".vst3")));
+
+		const auto bend = lmms::Vst3Instance::routeMidi(lmms::MidiPitchBend, 8192, 0);
+		QCOMPARE(static_cast<int>(bend.kind), static_cast<int>(lmms::Vst3Instance::MidiRoute::Kind::PitchBend));
+		QVERIFY(std::fabs(bend.normalized - 8192.0 / 16383.0) < 0.0001);
+
+		const auto cc = lmms::Vst3Instance::routeMidi(lmms::MidiControlChange, 7, 127);
+		QCOMPARE(static_cast<int>(cc.kind), static_cast<int>(lmms::Vst3Instance::MidiRoute::Kind::ControlChange));
+		QCOMPARE(cc.controller, 7);
+		QCOMPARE(cc.normalized, 1.0);
+
+		const auto pressure = lmms::Vst3Instance::routeMidi(lmms::MidiChannelPressure, 64, 0);
+		QCOMPARE(static_cast<int>(pressure.kind), static_cast<int>(lmms::Vst3Instance::MidiRoute::Kind::ChannelPressure));
+		QVERIFY(std::fabs(pressure.normalized - 64.0 / 127.0) < 0.0001);
+
+		const auto key = lmms::Vst3Instance::routeMidi(lmms::MidiKeyPressure, 60, 100);
+		QCOMPARE(static_cast<int>(key.kind), static_cast<int>(lmms::Vst3Instance::MidiRoute::Kind::KeyPressure));
+		QCOMPARE(key.key, 60);
+		QVERIFY(std::fabs(key.normalized - 100.0 / 127.0) < 0.0001);
 
 		QTemporaryDir root;
 		QVERIFY(root.isValid());
