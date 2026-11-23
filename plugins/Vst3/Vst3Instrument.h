@@ -9,9 +9,13 @@
 #ifndef LMMS_VST3_INSTRUMENT_H
 #define LMMS_VST3_INSTRUMENT_H
 
+#include <QPointer>
+
 #include "Instrument.h"
 #include "InstrumentView.h"
 #include "Vst3Instance.h"
+
+class QWidget;
 
 namespace lmms
 {
@@ -21,7 +25,10 @@ class Vst3Instrument : public Instrument
 	Q_OBJECT
 public:
 	explicit Vst3Instrument(InstrumentTrack* track);
-	~Vst3Instrument() override = default;
+	~Vst3Instrument() override;
+
+	void openNativeEditor();
+	void closeNativeEditor();
 
 	void play(SampleFrame* workingBuffer) override;
 	void saveSettings(QDomDocument& doc, QDomElement& element) override;
@@ -34,6 +41,7 @@ public:
 
 private:
 	Vst3Instance m_instance;
+	QPointer<QWidget> m_editorWindow;
 };
 
 namespace gui

@@ -7,6 +7,7 @@
  */
 
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include <QDir>
@@ -20,6 +21,7 @@
 #include "Midi.h"
 #include "SampleFrame.h"
 #include "Vst3Instance.h"
+#include "Vst3Panel.h"
 
 class Vst3HostTest : public QObject
 {
@@ -161,7 +163,63 @@ private slots:
 
 		config->setValue(QStringLiteral("vst3"), QStringLiteral("extradir"), previous);
 	}
+
+	void DestructionOrder()
+	{
+		lmms::ConfigManager::inst();
+		{
+			auto instance = std::make_unique<lmms::Vst3Instance>();
+			auto* panel = new lmms::gui::Vst3Panel(instance.get(), nullptr);
+			delete panel;
+			instance.reset();
+		}
+		{
+			auto instance = std::make_unique<lmms::Vst3Instance>();
+			auto* panel = new lmms::gui::Vst3Panel(instance.get(), nullptr);
+			instance.reset();
+			delete panel;
+		}
+	}
+
+	void MidiQueueKeepsNoteOffAndRejectsPitch()
+	{
+		using lmms::Vst3Instance;
+		std::vector<Vst3Instance::MidiMessage> messages;
+		Vst3Instance::MidiMessage control;
+		control.kind = Vst3Instance::MidiKind::ControlChange;
+		control.data = 7;
+		Vst3Instance::MidiMessage noteOff;
+		noteOff.kind = Vst3Instance::MidiKind::NoteOff;
+		noteOff.data = 60;
+		for (int index = 0; index < 300; ++index) { messages.push_back(control); }
+		messages.push_back(noteOff);
+		Vst3Instance::trimMidiQueue(messages, 256);
+		QVERIFY(messages.size() <= 256);
+		QCOMPARE(static_cast<int>(messages.back().kind), static_cast<int>(Vst3Instance::MidiKind::NoteOff));
+
+		messages.clear();
+		for (int index = 0; index < 300; ++index) { messages.push_back(noteOff); }
+		Vst3Instance::trimMidiQueue(messages, 256);
+		QCOMPARE(messages.size(), static_cast<std::size_t>(300));
+
+		Vst3Instance instance;
+		Vst3Instance::MidiMessage bad;
+		bad.kind = Vst3Instance::MidiKind::NoteOn;
+		bad.data = 200;
+		instance.addMidi(bad);
+		bad.kind = Vst3Instance::MidiKind::NoteOff;
+		bad.data = -1;
+		instance.addMidi(bad);
+		bad.kind = Vst3Instance::MidiKind::KeyPressure;
+		bad.data = 128;
+		instance.addMidi(bad);
+		QCOMPARE(instance.pendingMidiCount(), static_cast<std::size_t>(0));
+		bad.kind = Vst3Instance::MidiKind::NoteOff;
+		bad.data = 60;
+		instance.addMidi(bad);
+		QCOMPARE(instance.pendingMidiCount(), static_cast<std::size_t>(1));
+	}
 };
 
-QTEST_GUILESS_MAIN(Vst3HostTest)
+QTEST_MAIN(Vst3HostTest)
 #include "Vst3HostTest.moc"

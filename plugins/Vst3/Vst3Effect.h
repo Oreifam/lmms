@@ -11,7 +11,11 @@
 
 #include <vector>
 
+#include <QPointer>
+
 #include "Effect.h"
+
+class QWidget;
 #include "EffectControlDialog.h"
 #include "EffectControls.h"
 #include "Vst3Instance.h"
@@ -41,13 +45,17 @@ class Vst3Effect : public Effect
 	Q_OBJECT
 public:
 	Vst3Effect(Model* parent, const Descriptor::SubPluginFeatures::Key* key);
+	~Vst3Effect() override;
 	ProcessStatus processImpl(SampleFrame* buf, const f_cnt_t frames) override;
 	EffectControls* controls() override { return &m_controls; }
 	auto instance() -> Vst3Instance& { return m_instance; }
+	void openNativeEditor();
+	void closeNativeEditor();
 
 private:
 	Vst3EffectControls m_controls;
 	Vst3Instance m_instance;
+	QPointer<QWidget> m_editorWindow;
 	std::vector<SampleFrame> m_dry;
 
 	friend class Vst3EffectControls;

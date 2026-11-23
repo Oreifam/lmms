@@ -25,6 +25,7 @@
 #ifndef LMMS_VST3_INSTANCE_H
 #define LMMS_VST3_INSTANCE_H
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -115,8 +116,11 @@ public:
 	//! Called on the UI thread when the plugin editor edits a parameter.
 	void setParameterEditedHandler(std::function<void(unsigned int id, double normalized)> handler);
 
+	//! Checks for a Windows HWND editor. Call only after a project uid check has passed.
+	void probeEditor();
 	//! True when this plugin offers a Windows HWND editor.
 	auto editorSupported() const -> bool;
+	auto lifeToken() const -> std::weak_ptr<std::atomic<bool>>;
 	//! Parent is an HWND. The plugin cannot replace that window or grow past 4096 pixels.
 	auto attachEditor(void* parentWindow) -> bool;
 	void detachEditor();
@@ -125,6 +129,8 @@ public:
 	//! Queues a note for the next process() call. Safe against a concurrent load.
 	void addNote(const MidiNote& note);
 	void addMidi(const MidiMessage& message);
+	auto pendingMidiCount() const -> std::size_t;
+	static void trimMidiQueue(std::vector<MidiMessage>& messages, std::size_t limit);
 
 	//! Writes plugin output into @a buf. On failure the buffer is cleared and the call returns false.
 	auto process(SampleFrame* buf, f_cnt_t frames) -> bool;

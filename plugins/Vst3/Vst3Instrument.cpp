@@ -13,8 +13,11 @@
 
 #include "AudioEngine.h"
 #include "Engine.h"
+#include "GuiApplication.h"
 #include "InstrumentPlayHandle.h"
 #include "InstrumentTrack.h"
+#include "MainWindow.h"
+#include "SubWindow.h"
 #include "MidiEvent.h"
 #include "Vst3Panel.h"
 #include "embed.h"
@@ -46,6 +49,37 @@ Vst3Instrument::Vst3Instrument(InstrumentTrack* track)
 	Engine::audioEngine()->addPlayHandle(new InstrumentPlayHandle(this, track));
 }
 
+Vst3Instrument::~Vst3Instrument()
+{
+	closeNativeEditor();
+}
+
+void Vst3Instrument::openNativeEditor()
+{
+	if (!m_instance.editorSupported()) { return; }
+	if (m_editorWindow != nullptr)
+	{
+		m_editorWindow->show();
+		m_editorWindow->raise();
+		return;
+	}
+	if (gui::getGUI() == nullptr || gui::getGUI()->mainWindow() == nullptr) { return; }
+	auto* editor = gui::createVst3NativeEditor(&m_instance);
+	m_editorWindow = gui::getGUI()->mainWindow()->addWindowedWidget(editor);
+	if (m_editorWindow == nullptr) { return; }
+	m_editorWindow->setWindowTitle(m_instance.name());
+	m_editorWindow->show();
+}
+
+void Vst3Instrument::closeNativeEditor()
+{
+	auto* window = m_editorWindow.data();
+	m_editorWindow = nullptr;
+	if (window == nullptr) { return; }
+	window->hide();
+	delete window;
+}
+
 void Vst3Instrument::play(SampleFrame* workingBuffer)
 {
 	const auto frames = Engine::audioEngine()->framesPerPeriod();
@@ -60,6 +94,10 @@ void Vst3Instrument::saveSettings(QDomDocument& doc, QDomElement& element)
 	auto state = doc.createElement(QStringLiteral("state"));
 	state.setAttribute(QStringLiteral("data"), QString::fromLatin1(m_instance.saveState().toBase64()));
 	element.appendChild(state);
+	for (const auto& parameter : m_instance.parameters())
+	{
+		element.setAttribute(QStringLiteral("vst3p%1").arg(parameter.id), QString::number(parameter.normalized, 'g', 12));
+	}
 }
 
 void Vst3Instrument::loadSettings(const QDomElement& element)
@@ -75,6 +113,11 @@ void Vst3Instrument::loadSettings(const QDomElement& element)
 	if (!state.isEmpty())
 	{
 		m_instance.restoreState(QByteArray::fromBase64(state.toLatin1()));
+	}
+	for (const auto& parameter : m_instance.parameters())
+	{
+		const auto key = QStringLiteral("vst3p%1").arg(parameter.id);
+		if (element.hasAttribute(key)) { m_instance.setNormalized(parameter.id, element.attribute(key).toDouble()); }
 	}
 }
 
@@ -94,11 +137,14 @@ bool Vst3Instrument::handleMidiEvent(const MidiEvent& event, const TimePos&, f_c
 	switch (route.kind)
 	{
 	case Vst3Instance::MidiRoute::Kind::NoteOn:
-		message.kind = Vst3Instance::MidiKind::NoteOn;
-		message.data = route.key;
-		break;
 	case Vst3Instance::MidiRoute::Kind::NoteOff:
-		message.kind = Vst3Instance::MidiKind::NoteOff;
+	case Vst3Instance::MidiRoute::Kind::KeyPressure:
+		if (route.key < 0 || route.key > 127) { return true; }
+		message.kind = route.kind == Vst3Instance::MidiRoute::Kind::NoteOn
+			? Vst3Instance::MidiKind::NoteOn
+			: route.kind == Vst3Instance::MidiRoute::Kind::NoteOff
+			? Vst3Instance::MidiKind::NoteOff
+			: Vst3Instance::MidiKind::KeyPressure;
 		message.data = route.key;
 		break;
 	case Vst3Instance::MidiRoute::Kind::PitchBend:
@@ -110,10 +156,6 @@ bool Vst3Instrument::handleMidiEvent(const MidiEvent& event, const TimePos&, f_c
 		break;
 	case Vst3Instance::MidiRoute::Kind::ChannelPressure:
 		message.kind = Vst3Instance::MidiKind::ChannelPressure;
-		break;
-	case Vst3Instance::MidiRoute::Kind::KeyPressure:
-		message.kind = Vst3Instance::MidiKind::KeyPressure;
-		message.data = route.key;
 		break;
 	case Vst3Instance::MidiRoute::Kind::None:
 		return true;
@@ -131,7 +173,10 @@ Vst3InstrumentView::Vst3InstrumentView(Instrument* instrument, QWidget* parent)
 	auto* trackInstrument = castModel<Vst3Instrument>();
 	auto* layout = new QVBoxLayout(this);
 	layout->setContentsMargins(4, 4, 4, 4);
-	layout->addWidget(new Vst3Panel(&trackInstrument->instance(), trackInstrument, this));
+	auto* panel = new Vst3Panel(&trackInstrument->instance(), trackInstrument, this);
+	panel->setEditorHooks([trackInstrument] { trackInstrument->openNativeEditor(); },
+		[trackInstrument] { trackInstrument->closeNativeEditor(); });
+	layout->addWidget(panel);
 }
 
 } // namespace gui

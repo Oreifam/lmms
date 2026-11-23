@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QFileInfo>
 #include <QLabel>
@@ -33,8 +34,6 @@
 
 namespace lmms::gui
 {
-namespace
-{
 
 class Vst3NativeEditor : public QWidget
 {
@@ -42,6 +41,7 @@ public:
 	Vst3NativeEditor(Vst3Instance* instance, QWidget* parent)
 		: QWidget(parent)
 		, m_instance(instance)
+		, m_life(instance != nullptr ? instance->lifeToken() : std::weak_ptr<std::atomic<bool>>{})
 	{
 		setAttribute(Qt::WA_NativeWindow);
 		if (m_instance == nullptr) { return; }
@@ -53,31 +53,72 @@ public:
 
 	~Vst3NativeEditor() override
 	{
-		if (m_instance != nullptr) { m_instance->detachEditor(); }
+		releaseView();
 	}
 
 protected:
 	void showEvent(QShowEvent* event) override
 	{
 		QWidget::showEvent(event);
-		if (m_attached || m_instance == nullptr) { return; }
+		if (m_attached || !instanceAlive()) { return; }
 #ifdef LMMS_BUILD_WIN32
 		m_attached = m_instance->attachEditor(reinterpret_cast<void*>(static_cast<uintptr_t>(winId())));
-#else
-		(void)event;
 #endif
+	}
+
+	void closeEvent(QCloseEvent* event) override
+	{
+		releaseView();
+		QWidget::closeEvent(event);
+	}
+
+private:
+	bool instanceAlive() const
+	{
+		const auto life = m_life.lock();
+		return m_instance != nullptr && life && life->load();
+	}
+
+	void releaseView()
+	{
+		m_attached = false;
+		if (!instanceAlive()) { return; }
+		m_instance->setEditorResizeHandler(nullptr);
+		m_instance->detachEditor();
 	}
 
 private:
 	Vst3Instance* m_instance;
+	std::weak_ptr<std::atomic<bool>> m_life;
 	bool m_attached = false;
 };
 
-} // namespace
+QWidget* createVst3NativeEditor(Vst3Instance* instance)
+{
+	return new Vst3NativeEditor(instance, nullptr);
+}
+
+Vst3Panel::~Vst3Panel()
+{
+	if (m_panelAlive) { m_panelAlive->store(false); }
+	const auto life = m_life.lock();
+	if (m_instance != nullptr && life && life->load())
+	{
+		m_instance->setParameterEditedHandler(nullptr);
+		m_instance->setEditorResizeHandler(nullptr);
+	}
+	closeEditor();
+	for (auto& row : m_rows)
+	{
+		delete row.model.data();
+		row.model = nullptr;
+	}
+}
 
 Vst3Panel::Vst3Panel(Vst3Instance* instance, Model* automationParent, QWidget* parent)
 	: QWidget(parent)
 	, m_instance(instance)
+	, m_life(instance != nullptr ? instance->lifeToken() : std::weak_ptr<std::atomic<bool>>{})
 	, m_automationParent(automationParent)
 {
 	auto* layout = new QVBoxLayout(this);
@@ -107,7 +148,10 @@ Vst3Panel::Vst3Panel(Vst3Instance* instance, Model* automationParent, QWidget* p
 		closeEditor();
 		QString error;
 		const auto rate = Engine::audioEngine()->outputSampleRate();
-		m_instance->load(path, static_cast<int>(rate), MAXIMUM_BUFFER_SIZE, &error);
+		if (m_instance->load(path, static_cast<int>(rate), MAXIMUM_BUFFER_SIZE, &error))
+		{
+			m_instance->probeEditor();
+		}
 		refresh();
 	});
 	connect(m_extra, &QLineEdit::editingFinished, this, [this] {
@@ -117,7 +161,10 @@ Vst3Panel::Vst3Panel(Vst3Instance* instance, Model* automationParent, QWidget* p
 	connect(m_editorButton, &QPushButton::clicked, this, [this] { openEditor(); });
 	if (m_instance != nullptr)
 	{
-		m_instance->setParameterEditedHandler([this](unsigned int id, double normalized) {
+		m_instance->setParameterEditedHandler([this, alive = m_panelAlive](unsigned int id, double normalized) {
+			if (!alive->load()) { return; }
+			const auto life = m_life.lock();
+			if (!life || !life->load() || m_instance == nullptr) { return; }
 			m_updating = true;
 			for (const auto& row : m_rows)
 			{
@@ -131,27 +178,20 @@ Vst3Panel::Vst3Panel(Vst3Instance* instance, Model* automationParent, QWidget* p
 	refresh();
 }
 
+void Vst3Panel::setEditorHooks(std::function<void()> open, std::function<void()> close)
+{
+	m_openEditor = std::move(open);
+	m_closeEditor = std::move(close);
+}
+
 void Vst3Panel::openEditor()
 {
-	if (m_instance == nullptr || !m_instance->editorSupported()) { return; }
-	if (m_editorWindow != nullptr)
-	{
-		m_editorWindow->show();
-		m_editorWindow->raise();
-		return;
-	}
-	if (getGUI() == nullptr || getGUI()->mainWindow() == nullptr) { return; }
-	auto* editor = new Vst3NativeEditor(m_instance, nullptr);
-	m_editorWindow = getGUI()->mainWindow()->addWindowedWidget(editor);
-	if (m_editorWindow == nullptr) { return; }
-	m_editorWindow->setWindowTitle(m_instance->name());
-	m_editorWindow->show();
+	if (m_openEditor) { m_openEditor(); }
 }
 
 void Vst3Panel::closeEditor()
 {
-	if (m_instance != nullptr) { m_instance->detachEditor(); }
-	if (m_editorWindow != nullptr) { m_editorWindow->close(); }
+	if (m_closeEditor) { m_closeEditor(); }
 }
 
 void Vst3Panel::refresh()
@@ -195,9 +235,10 @@ void Vst3Panel::refresh()
 	}
 	m_editorButton->setEnabled(m_instance->editorSupported());
 
-	for (const auto& row : m_rows)
+	for (auto& row : m_rows)
 	{
-		delete row.model;
+		delete row.model.data();
+		row.model = nullptr;
 	}
 	m_rows.clear();
 	while (auto* item = m_parameters->takeAt(0))
@@ -218,19 +259,23 @@ void Vst3Panel::refresh()
 		Row row;
 		row.id = parameter.id;
 		row.slider = slider;
-		if (m_automationParent != nullptr)
-		{
-			row.model = new FloatModel(parameter.normalized, 0.0, 1.0, 0.001, m_automationParent, parameter.title);
-			connect(row.model, &FloatModel::dataChanged, this, [this, id = parameter.id, model = row.model] {
-				if (m_updating || m_instance == nullptr) { return; }
-				m_instance->setNormalized(id, model->value());
-			});
-		}
-		connect(slider, &QSlider::valueChanged, this, [this, id = parameter.id, model = row.model](int value) {
+		row.model = new FloatModel(static_cast<float>(parameter.normalized), 0.f, 1.f, 0.001f, m_automationParent,
+			QStringLiteral("vst3p%1").arg(parameter.id));
+		connect(row.model, &FloatModel::dataChanged, this, [this, id = parameter.id, model = row.model] {
+			if (m_updating || m_instance == nullptr) { return; }
+			const auto life = m_life.lock();
+			if (!life || !life->load()) { return; }
+			m_instance->setNormalized(id, model->value());
+		});
+		connect(slider, &QSlider::valueChanged, this, [this, id = parameter.id, model = QPointer<FloatModel>(row.model)](int value) {
 			if (m_updating) { return; }
 			const auto normalized = value / 1000.0;
 			if (model != nullptr) { model->setValue(normalized); }
-			else if (m_instance != nullptr) { m_instance->setNormalized(id, normalized); }
+			else if (m_instance != nullptr)
+			{
+				const auto life = m_life.lock();
+				if (life && life->load()) { m_instance->setNormalized(id, normalized); }
+			}
 		});
 		rowLayout->addWidget(label);
 		rowLayout->addWidget(slider);

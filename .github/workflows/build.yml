@@ -415,6 +415,7 @@ jobs:
             -G Ninja `
             --toolchain C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
             -Werror=dev `
+            -Wno-error=non-target-directive `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DTARGET_UARCH=official `
             -DWANT_QT6=ON `

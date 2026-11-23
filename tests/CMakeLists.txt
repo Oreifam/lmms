@@ -68,6 +68,7 @@ if(WANT_VST3 AND TARGET lmms_vst3host)
 
 	add_executable(Vst3HostTest src/core/Vst3HostTest.cpp)
 	add_test(NAME Vst3HostTest COMMAND Vst3HostTest)
+	set_tests_properties(Vst3HostTest PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 	target_include_directories(Vst3HostTest PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES> ${CMAKE_SOURCE_DIR}/plugins/Vst3)
 	target_static_libraries(Vst3HostTest PRIVATE lmmsobjs lmms_vst3host)
 	target_link_libraries(Vst3HostTest PRIVATE ${QT_LIBRARIES} ${QT_QTTEST_LIBRARY} lmms_vst3host)
